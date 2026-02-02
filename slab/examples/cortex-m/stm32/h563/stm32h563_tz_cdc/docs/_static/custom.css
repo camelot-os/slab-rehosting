@@ -1,0 +1,80 @@
+/* Custom CSS for STM32H563 TrustZone Documentation */
+
+/* Security status indicators */
+.security-status {
+    padding: 5px 10px;
+    border-radius: 4px;
+    font-weight: bold;
+}
+
+.security-compliant {
+    background-color: #d4edda;
+    color: #155724;
+    border: 1px solid #c3e6cb;
+}
+
+.security-partial {
+    background-color: #fff3cd;
+    color: #856404;
+    border: 1px solid #ffeeba;
+}
+
+.security-missing {
+    background-color: #f8d7da;
+    color: #721c24;
+    border: 1px solid #f5c6cb;
+}
+
+/* Code block styling */
+div.highlight {
+    border-left: 3px solid #0d6efd;
+}
+
+/* Warning/Note styling for security content */
+.admonition.security-critical {
+    background-color: #fff3cd;
+    border-left: 4px solid #ffc107;
+}
+
+.admonition.security-info {
+    background-color: #d1ecf1;
+    border-left: 4px solid #17a2b8;
+}
+
+/* Memory map table styling */
+table.memory-map {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+table.memory-map th {
+    background-color: #343a40;
+    color: white;
+    padding: 10px;
+}
+
+table.memory-map td {
+    padding: 8px;
+    border: 1px solid #dee2e6;
+}
+
+table.memory-map tr.secure {
+    background-color: #d4edda;
+}
+
+table.memory-map tr.nsc {
+    background-color: #fff3cd;
+}
+
+table.memory-map tr.nonsecure {
+    background-color: #f8d7da;
+}
+
+/* TikZ diagram containers */
+.tikz-diagram {
+    text-align: center;
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 8px;
+}

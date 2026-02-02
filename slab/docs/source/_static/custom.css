@@ -1,0 +1,90 @@
+/*
+ * MCUemu Documentation Custom Styles
+ * Copyright (C) 2026 TwistedWires Security Lab
+ */
+
+/* Code blocks */
+.highlight pre {
+    border-radius: 6px;
+    padding: 1em;
+}
+
+/* Tables */
+table.docutils {
+    border-collapse: collapse;
+    width: 100%;
+}
+
+table.docutils th,
+table.docutils td {
+    padding: 8px 12px;
+    border: 1px solid var(--color-table-border);
+}
+
+table.docutils th {
+    background-color: var(--color-table-header-bg);
+    font-weight: 600;
+}
+
+/* Figure captions */
+.figure .caption {
+    font-style: italic;
+    color: var(--color-foreground-secondary);
+    margin-top: 0.5em;
+}
+
+/* Admonitions */
+.admonition {
+    border-radius: 6px;
+    padding: 1em;
+    margin: 1em 0;
+}
+
+.admonition-title {
+    font-weight: 600;
+}
+
+/* Code references */
+code.xref {
+    font-weight: 500;
+}
+
+/* List tables with better spacing */
+table.docutils td p {
+    margin: 0;
+}
+
+/* Terminal output styling */
+.highlight-text pre,
+.highlight-none pre {
+    background-color: #1e293b;
+    color: #e2e8f0;
+}
+
+/* Sidebar improvements */
+.sidebar-brand-text {
+    font-weight: 600;
+}
+
+/* Navigation */
+.toctree-l1 > a {
+    font-weight: 500;
+}
+
+/* Version badge */
+.version-badge {
+    background-color: var(--color-brand-primary);
+    color: white;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-weight: 500;
+}
+
+/* Copyright footer */
+.footer-copyright {
+    text-align: center;
+    padding: 1em;
+    color: var(--color-foreground-secondary);
+    font-size: 0.9em;
+}

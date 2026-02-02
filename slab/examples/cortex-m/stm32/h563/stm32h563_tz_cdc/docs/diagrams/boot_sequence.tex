@@ -1,0 +1,94 @@
+% Boot Sequence Diagram
+% STM32H563 TrustZone CDC ACM Project
+%
+% Compile with: pdflatex boot_sequence.tex
+% Convert to SVG: pdf2svg boot_sequence.pdf boot_sequence.svg
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+
+\begin{document}
+
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{nscyellow}{RGB}{255,193,7}
+\definecolor{nsred}{RGB}{220,53,69}
+\definecolor{errorred}{RGB}{178,34,34}
+\definecolor{checkblue}{RGB}{65,105,225}
+
+\begin{tikzpicture}[
+    node distance=0.7cm,
+    block/.style={draw, rounded corners=4pt, minimum width=4cm, minimum height=0.8cm, align=center, font=\small, thick},
+    decision/.style={draw, diamond, aspect=2.5, minimum width=1.5cm, align=center, font=\small, thick},
+    secure/.style={block, fill=securegreen!30},
+    check/.style={decision, fill=checkblue!20},
+    ns/.style={block, fill=nsred!20},
+    error/.style={block, fill=errorred!30},
+    arrow/.style={-{Stealth[length=2.5mm]}, thick},
+    yesno/.style={font=\tiny\bfseries}
+]
+
+% Reset and Boot ROM
+\node[block, fill=gray!30] (reset) {System Reset};
+\node[block, fill=gray!20, below=of reset] (bootrom) {Boot ROM\\(Fixed in silicon)};
+
+% MCUboot
+\node[secure, below=of bootrom] (bl2) {MCUboot (BL2)\\Load from 0x0C000000};
+
+% Signature check
+\node[check, below=of bl2] (sigcheck) {Signature\\Valid?};
+\node[error, right=2cm of sigcheck] (sighalt) {HALT\\Boot Error};
+
+% Secure main
+\node[secure, below=of sigcheck] (smain) {Secure main()\\SAU\_Setup()};
+\node[secure, below=of smain] (halinit) {HAL\_Init()\\SystemClock\_Config()};
+\node[secure, below=of halinit] (gtzc) {MX\_GTZC\_S\_Init()\\MPCBB Configuration};
+\node[secure, below=of gtzc] (dma) {Security\_ConfigureGPDMA()\\All channels to NS};
+\node[secure, below=of dma] (periph) {MX\_GPIO\_Init()\\MX\_USART1\_UART\_Init()};
+\node[secure, below=of periph] (iwdg) {MX\_IWDG\_Init()\\Watchdog Started};
+
+% NS validation
+\node[check, below=of iwdg] (nscheck) {NS Image\\Valid?};
+\node[error, right=2cm of nscheck] (nshalt) {HALT\\Invalid NS};
+
+% NS boot
+\node[block, fill=nscyellow!30, below=of nscheck] (nsjump) {NonSecure\_Init()\\Set VTOR, MSP};
+
+% NS execution
+\node[ns, below=of nsjump] (nsreset) {NS Reset Handler};
+\node[ns, below=of nsreset] (nsmain) {NS main()\\HAL\_Init()};
+\node[ns, below=of nsmain] (threadx) {tx\_kernel\_enter()\\ThreadX Start};
+\node[ns, below=of threadx] (usb) {USBX Init\\CDC ACM Ready};
+
+% Arrows
+\draw[arrow] (reset) -- (bootrom);
+\draw[arrow] (bootrom) -- (bl2);
+\draw[arrow] (bl2) -- (sigcheck);
+\draw[arrow] (sigcheck) -- node[left, yesno] {YES} (smain);
+\draw[arrow] (sigcheck) -- node[above, yesno] {NO} (sighalt);
+\draw[arrow] (smain) -- (halinit);
+\draw[arrow] (halinit) -- (gtzc);
+\draw[arrow] (gtzc) -- (dma);
+\draw[arrow] (dma) -- (periph);
+\draw[arrow] (periph) -- (iwdg);
+\draw[arrow] (iwdg) -- (nscheck);
+\draw[arrow] (nscheck) -- node[left, yesno] {YES} (nsjump);
+\draw[arrow] (nscheck) -- node[above, yesno] {NO} (nshalt);
+\draw[arrow] (nsjump) -- (nsreset);
+\draw[arrow] (nsreset) -- (nsmain);
+\draw[arrow] (nsmain) -- (threadx);
+\draw[arrow] (threadx) -- (usb);
+
+% Phase labels
+\node[left=1.5cm of bl2, font=\small\itshape, text=gray] {Bootloader};
+\node[left=1.5cm of gtzc, font=\small\itshape, text=gray] {Secure Init};
+\node[left=1.5cm of nsjump, font=\small\itshape, text=gray] {NS Transition};
+\node[left=1.5cm of threadx, font=\small\itshape, text=gray] {Application};
+
+% Security boundary
+\draw[thick, dashed, gray] (-3,-10.5) -- (6,-10.5);
+\node[right, font=\tiny\itshape, gray] at (-3,-10.3) {Security State Transition};
+
+\end{tikzpicture}
+
+\end{document}

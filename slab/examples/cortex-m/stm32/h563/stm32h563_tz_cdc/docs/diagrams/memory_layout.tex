@@ -1,0 +1,128 @@
+% Memory Layout Diagram
+% STM32H563 TrustZone CDC ACM Project
+%
+% Compile with: pdflatex memory_layout.tex
+% Convert to SVG: pdf2svg memory_layout.pdf memory_layout.svg
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,patterns}
+
+\begin{document}
+
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{nscyellow}{RGB}{255,193,7}
+\definecolor{nsred}{RGB}{220,53,69}
+
+\begin{tikzpicture}[
+    memblock/.style={draw, minimum width=4cm, align=center, font=\small, thick},
+    secure/.style={memblock, fill=securegreen!30},
+    nsc/.style={memblock, fill=nscyellow!40},
+    nonsecure/.style={memblock, fill=nsred!20},
+    unused/.style={memblock, fill=gray!20, pattern=north east lines, pattern color=gray!50},
+    addr/.style={font=\tiny\ttfamily, anchor=east},
+    size/.style={font=\tiny, anchor=west},
+    title/.style={font=\small\bfseries}
+]
+
+% Flash Column
+\node[title] at (2,8) {FLASH MEMORY};
+
+% Secure Flash
+\node[secure, minimum height=2.5cm] (sf) at (2,6) {
+    \textbf{Secure Flash}\\
+    MCUboot (BL2)\\
+    Secure main.c\\
+    secure\_nsc.c\\
+    HAL/CMSIS
+};
+\node[addr] at (-0.3,7.25) {0x0C000000};
+\node[addr] at (-0.3,4.75) {0x0C03FFFF};
+\node[size] at (4.3,6) {256 KB};
+
+% NSC Region
+\node[nsc, minimum height=1cm] (nsc) at (2,4) {
+    \textbf{NSC Region}\\
+    .gnu.sgstubs
+};
+\node[addr] at (-0.3,4.5) {0x0C040000};
+\node[addr] at (-0.3,3.5) {0x0C041FFF};
+\node[size] at (4.3,4) {8 KB};
+
+% Reserved/Unused
+\node[unused, minimum height=0.6cm] (unused1) at (2,3.2) {\tiny Reserved};
+
+% Non-Secure Flash
+\node[nonsecure, minimum height=3cm] (nsf) at (2,1.2) {
+    \textbf{Non-Secure Flash}\\
+    NS main.c\\
+    USB CDC (USBX)\\
+    ThreadX RTOS\\
+    Application Code
+};
+\node[addr] at (-0.3,2.7) {0x08042000};
+\node[addr] at (-0.3,-0.3) {0x081FFFFF};
+\node[size] at (4.3,1.2) {~1.75 MB};
+
+% SRAM Column
+\node[title] at (9,8) {SRAM MEMORY};
+
+% SRAM1 (Secure)
+\node[secure, minimum height=2cm] (sram1) at (9,6.25) {
+    \textbf{SRAM1 (Secure)}\\
+    Secure Stack\\
+    Crypto Buffers\\
+    Secure Heap
+};
+\node[addr] at (6.7,7.25) {0x30000000};
+\node[addr] at (6.7,5.25) {0x3003FFFF};
+\node[size] at (11.3,6.25) {256 KB};
+
+% SRAM2 (Non-Secure)
+\node[nonsecure, minimum height=1.2cm] (sram2) at (9,4.35) {
+    \textbf{SRAM2 (NS)}\\
+    NS Stack
+};
+\node[addr] at (6.7,4.95) {0x30040000};
+\node[addr] at (6.7,3.75) {0x3004FFFF};
+\node[size] at (11.3,4.35) {64 KB};
+
+% SRAM3 (Non-Secure)
+\node[nonsecure, minimum height=2.5cm] (sram3) at (9,2.1) {
+    \textbf{SRAM3 (NS)}\\
+    USB Buffers\\
+    ThreadX Stacks\\
+    Application Heap\\
+    USBX Memory
+};
+\node[addr] at (6.7,3.35) {0x30050000};
+\node[addr] at (6.7,0.85) {0x300BFFFF};
+\node[size] at (11.3,2.1) {448 KB};
+
+% MPCBB indicator
+\draw[thick, decorate, decoration={brace, amplitude=5pt}] (11.5,7.25) -- (11.5,5.25);
+\node[right, font=\tiny] at (11.7,6.25) {MPCBB: 0xFFFFFFFF};
+
+\draw[thick, decorate, decoration={brace, amplitude=5pt}] (11.5,4.95) -- (11.5,0.85);
+\node[right, font=\tiny] at (11.7,2.9) {MPCBB: 0x00000000};
+
+% Peripherals Section
+\node[title] at (2,-1.5) {PERIPHERALS};
+
+\node[nonsecure, minimum height=0.8cm, minimum width=3cm] (usb) at (1,-2.3) {USB OTG FS\\0x40080000};
+\node[secure, minimum height=0.8cm, minimum width=3cm] (uart) at (5,-2.3) {USART1\\0x40013800};
+\node[secure, minimum height=0.8cm, minimum width=3cm] (rng) at (9,-2.3) {RNG\\0x420C0800};
+
+% Legend
+\node[secure, minimum width=1.2cm, minimum height=0.4cm] at (1,-3.8) {};
+\node[right, font=\tiny] at (1.8,-3.8) {Secure};
+\node[nsc, minimum width=1.2cm, minimum height=0.4cm] at (4,-3.8) {};
+\node[right, font=\tiny] at (4.8,-3.8) {NSC};
+\node[nonsecure, minimum width=1.2cm, minimum height=0.4cm] at (6.5,-3.8) {};
+\node[right, font=\tiny] at (7.3,-3.8) {Non-Secure};
+\node[unused, minimum width=1.2cm, minimum height=0.4cm] at (9.5,-3.8) {};
+\node[right, font=\tiny] at (10.3,-3.8) {Unused};
+
+\end{tikzpicture}
+
+\end{document}

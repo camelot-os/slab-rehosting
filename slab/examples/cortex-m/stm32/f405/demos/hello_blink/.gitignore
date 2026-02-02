@@ -1,0 +1,11 @@
+# Build outputs
+build/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Debug files
+*.dSYM/

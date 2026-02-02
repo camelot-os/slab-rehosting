@@ -1,0 +1,223 @@
+.. _architecture_overview:
+
+======================
+Architecture Overview
+======================
+
+MCUemu uses a modular architecture that separates CPU emulation (QEMU) from
+peripheral behavior (Python), enabling flexible firmware analysis and testing.
+
+Design Principles
+=================
+
+1. **Separation of Concerns**: QEMU handles CPU/memory, Python handles peripherals
+2. **Register Accuracy**: Peripheral stubs match real hardware register behavior
+3. **Extensibility**: Easy to add new MCU families without QEMU modifications
+4. **Performance**: SHM mode achieves ~3μs per MMIO access
+5. **Debuggability**: Full MMIO tracing and signal capture
+
+System Components
+=================
+
+.. figure:: ../images/mcuemu_architecture.png
+   :alt: MCUemu Architecture
+   :align: center
+   :width: 100%
+
+   MCUemu Architecture Overview
+
+QEMU slab-cortex-m Machine
+--------------------------
+
+A generic ARM Cortex-M machine that:
+
+- Emulates all Cortex-M variants (M0 to M85)
+- Provides configurable Flash and SRAM
+- Forwards all peripheral MMIO to external server
+- Supports TrustZone for ARMv8-M cores
+- Supports dual-core for STM32H7, RP2040, etc.
+
+**Configuration Options:**
+
+.. code-block:: text
+
+   -M slab-cortex-m,<options>
+
+   Options:
+     cpu-type=<type>       CPU model (cortex-m0 to cortex-m85)
+     flash-base=<addr>     Flash base address
+     flash-size=<size>     Flash size in bytes
+     sram-base=<addr>      SRAM base address
+     sram-size=<size>      SRAM size in bytes
+     tcp-port=<port>       Peripheral proxy port (default: 5000)
+     proxy-mode=<mode>     tcp or shm
+     trustzone=on/off      Enable TrustZone (ARMv8-M only)
+     dual-core=on/off      Enable second CPU core
+
+Peripheral Proxy
+----------------
+
+Binary protocol connecting QEMU to Python:
+
+.. code-block:: text
+
+   Request Format (9 bytes):
+   ┌──────┬──────────┬──────────┬──────────┐
+   │ Cmd  │ Address  │  Size    │  Value   │
+   │ 1B   │   4B     │   4B     │   4B     │
+   └──────┴──────────┴──────────┴──────────┘
+
+   Response Format (5 bytes):
+   ┌──────────┬────────┐
+   │  Value   │ Status │
+   │   4B     │   1B   │
+   └──────────┴────────┘
+
+**Commands:**
+
+- ``R`` (0x52): Non-Secure read
+- ``W`` (0x57): Non-Secure write
+- ``S`` (0x53): Secure read
+- ``T`` (0x54): Secure write
+
+Python Peripheral Server
+------------------------
+
+Implements peripheral register behavior:
+
+.. code-block:: python
+
+   class PeripheralServer:
+       def __init__(self):
+           self.peripherals = {}  # name → peripheral
+
+       def read(self, address: int, size: int) -> tuple:
+           for p in self.peripherals.values():
+               if p.contains(address):
+                   return p.read(address, size)
+           return (0, 0)
+
+       def write(self, address: int, size: int, value: int) -> int:
+           for p in self.peripherals.values():
+               if p.contains(address):
+                   return p.write(address, size, value)
+           return 0
+
+Data Flow
+=========
+
+.. figure:: ../images/dataflow.png
+   :alt: Data Flow Diagram
+   :align: center
+   :width: 90%
+
+   MMIO Request Flow: Firmware → QEMU → Proxy → Python → Response
+
+1. Firmware executes load/store to peripheral address
+2. QEMU's memory system intercepts the access
+3. slab-cortex-m machine forwards to peripheral proxy
+4. Python peripheral server processes the request
+5. Response sent back through same path
+6. QEMU returns value to firmware
+
+Latency Characteristics
+-----------------------
+
+.. list-table::
+   :widths: 30 20 50
+   :header-rows: 1
+
+   * - Mode
+     - Latency
+     - Use Case
+   * - TCP (localhost)
+     - ~45 μs
+     - Remote debugging, distributed
+   * - POSIX SHM
+     - ~3 μs
+     - High-performance local emulation
+   * - In-QEMU (no proxy)
+     - ~0.1 μs
+     - Baseline (not recommended)
+
+Peripheral Model
+================
+
+Each peripheral follows a common interface:
+
+.. code-block:: python
+
+   class BasePeripheral:
+       def __init__(self, base: int, size: int = 0x400):
+           self.base = base
+           self.size = size
+           self.regs = {}
+
+       def contains(self, address: int) -> bool:
+           return self.base <= address < self.base + self.size
+
+       def read(self, address: int, size: int) -> tuple:
+           """Return (value, status)"""
+           offset = address - self.base
+           return (self.regs.get(offset, 0), 0)
+
+       def write(self, address: int, size: int, value: int) -> int:
+           """Return status (0=OK)"""
+           offset = address - self.base
+           self.regs[offset] = value
+           return 0
+
+Peripheral Sets
+---------------
+
+Pre-built peripheral collections for common MCUs:
+
+.. code-block:: python
+
+   from slab_stm32 import STM32F439PeripheralSet
+
+   ps = STM32F439PeripheralSet()
+   # Includes: RCC, GPIO×9, USART×6, SPI×3, I2C×3,
+   #           DMA×2, CRYP, HASH, USB_OTG, ...
+
+USB OTG Integration
+===================
+
+For USB device emulation, MCUemu includes a USBIP bridge:
+
+.. figure:: ../images/usb_architecture.png
+   :alt: USB Architecture
+   :align: center
+   :width: 90%
+
+   USB Path: Firmware → OTG Peripheral → USBIP → Host
+
+1. Firmware writes to USB OTG registers
+2. Python USB peripheral interprets protocol
+3. USBIP server presents virtual USB device
+4. Host system sees ``/dev/ttyACM0`` (CDC) or other device
+
+Visualization Integration
+=========================
+
+The debug dashboard connects to peripheral callbacks:
+
+.. code-block:: python
+
+   # GPIO → LED display
+   gpio.on_pin_change = lambda pin, val, out: \
+       dashboard.set_led(f"P{pin}", val)
+
+   # UART → Console
+   usart.on_tx = lambda byte: \
+       dashboard.add_uart_byte(byte)
+
+   # All signals → Logic analyzer
+   capture.record("GPIO_PA5", value)
+
+Next Steps
+==========
+
+* :ref:`proxy_protocol` - Detailed protocol specification
+* :ref:`peripheral_model` - Peripheral implementation guide
+* :ref:`api/slab_cortex_m` - Core API reference

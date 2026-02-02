@@ -1,0 +1,121 @@
+% PSA Services Flow Diagram
+% STM32H563 TrustZone CDC ACM Project (TF-M Variant)
+%
+% Compile with: pdflatex psa_services.tex
+% Convert to SVG: pdf2svg psa_services.pdf psa_services.svg
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds}
+
+\begin{document}
+
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{nscyellow}{RGB}{255,193,7}
+\definecolor{nsred}{RGB}{220,53,69}
+\definecolor{serviceblue}{RGB}{70,130,180}
+\definecolor{hwgray}{RGB}{128,128,128}
+
+\begin{tikzpicture}[
+    node distance=0.8cm,
+    block/.style={draw, rounded corners=4pt, minimum width=3.5cm, minimum height=0.9cm, align=center, font=\small, thick},
+    service/.style={block, fill=serviceblue!30},
+    ns/.style={block, fill=nsred!20},
+    api/.style={block, fill=nscyellow!40},
+    hw/.style={block, fill=hwgray!30},
+    spm/.style={block, fill=securegreen!30, minimum width=5cm},
+    arrow/.style={-{Stealth[length=2.5mm]}, thick},
+    doublearrow/.style={{Stealth[length=2.5mm]}-{Stealth[length=2.5mm]}, thick},
+    label/.style={font=\small\bfseries}
+]
+
+% Title
+\node[font=\large\bfseries] at (5,8) {PSA Service Architecture (TF-M)};
+
+% Non-Secure World
+\begin{scope}[on background layer]
+    \node[draw, rounded corners=8pt, fill=nsred!10, minimum width=6cm, minimum height=3.5cm] (nsbox) at (0,5.5) {};
+\end{scope}
+\node[above, label] at (0,7.5) {NON-SECURE WORLD};
+
+\node[ns] (nsapp) at (0,6.5) {NS Application\\(USB CDC)};
+\node[api] (psaapi) at (0,5) {PSA API Calls\\(psa\_crypto\_*, psa\_ps\_*)};
+\node[block, fill=nscyellow!30] (veneer) at (0,3.5) {s\_veneers.o\\(NSC Library)};
+
+% Secure World
+\begin{scope}[on background layer]
+    \node[draw, rounded corners=8pt, fill=securegreen!10, minimum width=11cm, minimum height=6cm] (sbox) at (5.5,0) {};
+\end{scope}
+\node[above, label] at (5.5,3.2) {SECURE WORLD (TF-M)};
+
+% SPM
+\node[spm] (spm) at (5.5,2) {Secure Partition Manager (SPM)\\Request Routing \& Isolation};
+
+% Services
+\node[service] (crypto) at (1,0) {Crypto\\Service};
+\node[service] (its) at (4,0) {Internal\\Trusted Storage};
+\node[service] (ps) at (7,0) {Protected\\Storage};
+\node[service] (attest) at (10,0) {Initial\\Attestation};
+
+% Hardware
+\node[hw] (aes) at (1,-2) {AES\\Accelerator};
+\node[hw] (sha) at (4,-2) {SHA\\Accelerator};
+\node[hw] (rng) at (7,-2) {Hardware\\RNG};
+\node[hw] (flash) at (10,-2) {Internal\\Flash};
+
+% Arrows: NS -> PSA -> Veneer
+\draw[arrow] (nsapp) -- (psaapi);
+\draw[arrow] (psaapi) -- (veneer);
+
+% Arrow: Veneer -> SPM (crosses boundary)
+\draw[arrow, color=securegreen] (veneer) -- (spm) node[midway, right, font=\tiny] {SG Instruction};
+
+% Arrows: SPM -> Services
+\draw[arrow] (spm) -- (crypto);
+\draw[arrow] (spm) -- (its);
+\draw[arrow] (spm) -- (ps);
+\draw[arrow] (spm) -- (attest);
+
+% Arrows: Services -> Hardware
+\draw[arrow] (crypto) -- (aes);
+\draw[arrow] (crypto.south) -- ++(0,-0.3) -| (sha);
+\draw[arrow] (its) -- (sha);
+\draw[arrow] (ps) -- (rng);
+\draw[arrow] (ps.south) -- ++(0,-0.3) -| (flash);
+\draw[arrow] (attest) -- (flash);
+
+% Service descriptions
+\node[font=\tiny, anchor=north, text width=2.5cm, align=center] at (1,-0.7) {AES-256-GCM\\SHA-256\\Key Mgmt};
+\node[font=\tiny, anchor=north, text width=2.5cm, align=center] at (4,-0.7) {Config Data\\Small Assets};
+\node[font=\tiny, anchor=north, text width=2.5cm, align=center] at (7,-0.7) {Encrypted\\At Rest};
+\node[font=\tiny, anchor=north, text width=2.5cm, align=center] at (10,-0.7) {Device\\Identity};
+
+% Security boundary
+\draw[thick, dashed, gray] (-3,2.8) -- (12,2.8);
+\node[right, font=\tiny\itshape, gray] at (-3,2.6) {TrustZone Boundary};
+
+% API examples box
+\node[draw, rounded corners, fill=white, font=\tiny, text width=4cm, align=left] at (10,5.5) {
+    \textbf{PSA API Examples:}\\[2pt]
+    psa\_crypto\_init()\\
+    psa\_generate\_key()\\
+    psa\_aead\_encrypt()\\
+    psa\_hash\_compute()\\
+    psa\_ps\_set()\\
+    psa\_ps\_get()\\
+    psa\_initial\_attest\_get\_token()
+};
+
+% Legend
+\node[ns, minimum width=1.2cm, minimum height=0.4cm] at (0,-3.5) {};
+\node[right, font=\tiny] at (0.8,-3.5) {NS Code};
+\node[api, minimum width=1.2cm, minimum height=0.4cm] at (3,-3.5) {};
+\node[right, font=\tiny] at (3.8,-3.5) {PSA API};
+\node[service, minimum width=1.2cm, minimum height=0.4cm] at (6,-3.5) {};
+\node[right, font=\tiny] at (6.8,-3.5) {TF-M Service};
+\node[hw, minimum width=1.2cm, minimum height=0.4cm] at (9,-3.5) {};
+\node[right, font=\tiny] at (9.8,-3.5) {Hardware};
+
+\end{tikzpicture}
+
+\end{document}

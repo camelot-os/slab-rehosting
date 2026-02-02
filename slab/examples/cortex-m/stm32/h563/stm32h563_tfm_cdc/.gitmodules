@@ -1,0 +1,14 @@
+[submodule "SDK/STM32CubeH5"]
+	path = SDK/STM32CubeH5
+	url = https://github.com/STMicroelectronics/STM32CubeH5.git
+	shallow = true
+
+[submodule "SDK/tf-m"]
+	path = SDK/tf-m
+	url = https://git.trustedfirmware.org/TF-M/trusted-firmware-m.git
+	branch = TF-Mv2.0.0
+
+[submodule "SDK/mcuboot"]
+	path = SDK/mcuboot
+	url = https://github.com/mcu-tools/mcuboot.git
+	branch = v2.0.0

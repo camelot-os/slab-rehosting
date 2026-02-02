@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build artifacts
+*.o
+*.a
+*.so
+*.bin
+*.elf
+
+# Docs build
+docs/build/
+docs/source/_build/
+
+# Logs and temp files
+*.log
+*.tmp
+
+# SVD files (download separately)
+svd/

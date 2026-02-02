@@ -1,0 +1,115 @@
+% SAU Regions Diagram
+% STM32H563 TrustZone CDC ACM Project
+%
+% Compile with: pdflatex sau_regions.tex
+% Convert to SVG: pdf2svg sau_regions.pdf sau_regions.svg
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,decorations.pathreplacing}
+
+\begin{document}
+
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{nscyellow}{RGB}{255,193,7}
+\definecolor{nsred}{RGB}{220,53,69}
+
+\begin{tikzpicture}[
+    region/.style={draw, thick, minimum width=6cm, align=center, font=\small},
+    secure/.style={region, fill=securegreen!30},
+    nsc/.style={region, fill=nscyellow!40},
+    nonsecure/.style={region, fill=nsred!20},
+    default/.style={region, fill=securegreen!15, pattern=north east lines, pattern color=securegreen!30},
+    addr/.style={font=\tiny\ttfamily},
+    regnumber/.style={font=\small\bfseries, fill=white, draw, circle, minimum size=0.6cm}
+]
+
+% Title
+\node[font=\large\bfseries] at (3,9) {SAU Region Configuration};
+\node[font=\small\itshape] at (3,8.5) {Security Attribution Unit - 4 Regions Used};
+
+% Address space representation (vertical bar on left)
+\draw[thick] (-1,0) -- (-1,7.5);
+\draw[thick] (-1.2,7.5) -- (-0.8,7.5);
+\draw[thick] (-1.2,0) -- (-0.8,0);
+\node[addr, anchor=east] at (-1.3,7.5) {0xFFFFFFFF};
+\node[addr, anchor=east] at (-1.3,0) {0x00000000};
+
+% Default secure (uncovered memory)
+\node[default, minimum height=1cm] at (3,7) {Default: SECURE\\(All uncovered memory)};
+
+% SAU Region 3: NS Peripherals
+\node[nonsecure, minimum height=1.5cm] (r3) at (3,5.5) {
+    \textbf{SAU Region 3}\\
+    Non-Secure Peripherals\\
+    0x40000000 - 0x4FFFFFFF
+};
+\node[regnumber] at (-0.2,5.5) {3};
+\node[addr, anchor=west] at (6.2,6.1) {Start: 0x40000000};
+\node[addr, anchor=west] at (6.2,4.9) {End: 0x4FFFFFFF};
+
+% SAU Region 2: NS SRAM
+\node[nonsecure, minimum height=1.2cm] (r2) at (3,3.8) {
+    \textbf{SAU Region 2}\\
+    Non-Secure SRAM\\
+    0x20020000 - 0x2009FFFF
+};
+\node[regnumber] at (-0.2,3.8) {2};
+\node[addr, anchor=west] at (6.2,4.3) {Start: 0x20020000};
+\node[addr, anchor=west] at (6.2,3.3) {End: 0x2009FFFF};
+
+% SAU Region 1: NSC
+\node[nsc, minimum height=1cm] (r1) at (3,2.4) {
+    \textbf{SAU Region 1}\\
+    Non-Secure Callable\\
+    0x0C040000 - 0x0C041FFF
+};
+\node[regnumber] at (-0.2,2.4) {1};
+\node[addr, anchor=west] at (6.2,2.8) {Start: 0x0C040000};
+\node[addr, anchor=west] at (6.2,2.0) {End: 0x0C041FFF};
+
+% SAU Region 0: NS Flash
+\node[nonsecure, minimum height=1.5cm] (r0) at (3,1) {
+    \textbf{SAU Region 0}\\
+    Non-Secure Flash\\
+    0x08042000 - 0x081FFFFF
+};
+\node[regnumber] at (-0.2,1) {0};
+\node[addr, anchor=west] at (6.2,1.6) {Start: 0x08042000};
+\node[addr, anchor=west] at (6.2,0.4) {End: 0x081FFFFF};
+
+% Region attributes table
+\node[font=\small\bfseries] at (3,-1) {Region Attributes};
+
+\node[draw, minimum width=8cm, minimum height=2.5cm, anchor=north] (table) at (3,-1.3) {};
+
+\node[font=\tiny, anchor=north west] at (-0.9,-1.5) {
+    \begin{tabular}{|c|c|c|c|c|}
+    \hline
+    \textbf{Region} & \textbf{Start} & \textbf{End} & \textbf{NSC} & \textbf{Type} \\
+    \hline
+    0 & 0x08042000 & 0x081FFFFF & 0 & Non-Secure \\
+    1 & 0x0C040000 & 0x0C041FFF & 1 & NSC \\
+    2 & 0x20020000 & 0x2009FFFF & 0 & Non-Secure \\
+    3 & 0x40000000 & 0x4FFFFFFF & 0 & Non-Secure \\
+    \hline
+    \end{tabular}
+};
+
+% Legend
+\node[secure, minimum width=1.5cm, minimum height=0.4cm] at (0.5,-4.5) {};
+\node[right, font=\tiny] at (1.4,-4.5) {Secure (Default)};
+\node[nsc, minimum width=1.5cm, minimum height=0.4cm] at (4,-4.5) {};
+\node[right, font=\tiny] at (4.9,-4.5) {NSC (Region 1)};
+\node[nonsecure, minimum width=1.5cm, minimum height=0.4cm] at (7,-4.5) {};
+\node[right, font=\tiny] at (7.9,-4.5) {Non-Secure};
+
+% Note
+\node[font=\tiny\itshape, text width=8cm, align=center] at (3,-5.3) {
+    Note: All memory not covered by SAU regions is treated as Secure.\\
+    SAU\_CTRL.ALLNS = 0 (default behavior)
+};
+
+\end{tikzpicture}
+
+\end{document}

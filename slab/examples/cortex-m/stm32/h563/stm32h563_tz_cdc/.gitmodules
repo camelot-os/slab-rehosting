@@ -1,0 +1,4 @@
+[submodule "SDK/STM32CubeH5"]
+	path = SDK/STM32CubeH5
+	url = https://github.com/STMicroelectronics/STM32CubeH5.git
+	shallow = true

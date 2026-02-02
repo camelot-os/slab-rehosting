@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slab-peripherals"
+version = "0.1.0"
+description = "Slab Peripherals - SVD-based peripheral models with LLM auto-generation"
+readme = "README.md"
+license = {text = "GPL-2.0-or-later OR Apache-2.0"}
+authors = [
+    {name = "Mathieu Renard", email = "mathieu.renard@twistedwires.io"}
+]
+keywords = ["svd", "peripherals", "microcontroller", "emulation", "arm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Embedded Systems",
+]
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "mypy",
+]
+
+[project.urls]
+Homepage = "https://github.com/twistedwires/slab"
+Documentation = "https://twistedwires.github.io/slab"
+
+[tool.setuptools]
+py-modules = ["slab_peripherals"]
+packages = ["slab_peripherals"]
+
+[tool.setuptools.package-dir]
+slab_peripherals = "."

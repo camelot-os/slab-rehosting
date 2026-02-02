@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slab-hw"
+version = "0.1.0"
+description = "Hardware attack interfaces for Slab security testing framework"
+readme = "README.md"
+license = {text = "GPL-2.0-or-later"}
+authors = [
+    {name = "Mathieu Renard", email = "mathieu.renard@twistedwires.io"}
+]
+maintainers = [
+    {name = "Mathieu Renard", email = "mathieu.renard@twistedwires.io"}
+]
+keywords = [
+    "security",
+    "hardware",
+    "fault-injection",
+    "side-channel",
+    "chipwhisperer",
+    "lascar",
+    "emulation",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Scientific/Engineering",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.20.0",
+]
+
+[project.optional-dependencies]
+serial = [
+    "pyserial>=3.5",
+]
+lascar = [
+    "lascar>=1.0.0",
+]
+chipwhisperer = [
+    "chipwhisperer>=5.6.0",
+]
+all = [
+    "pyserial>=3.5",
+    "lascar>=1.0.0",
+    "chipwhisperer>=5.6.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/twistedwires/slab"
+Documentation = "https://twistedwires.github.io/slab/"
+Repository = "https://github.com/twistedwires/slab"
+Issues = "https://github.com/twistedwires/slab/issues"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["slab_hw*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=slab_hw --cov-report=term-missing"

@@ -1,0 +1,23 @@
+# Build artifacts
+build/
+*.o
+*.elf
+*.bin
+*.hex
+*.map
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# SDK (submodule)
+SDK/STM32CubeH5/
+
+# Sphinx docs build
+docs/_build/
+
+# OS
+.DS_Store
+Thumbs.db

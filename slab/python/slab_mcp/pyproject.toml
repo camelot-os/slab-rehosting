@@ -1,0 +1,67 @@
+# Slab MCP Package
+#
+# Author: Mathieu Renard <mathieu.renard@twistedwires.io>
+# Copyright (C) 2025 TwistedWires Security Lab
+# SPDX-License-Identifier: GPL-2.0-or-later
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "slab-mcp"
+version = "0.1.0"
+description = "Slab MCP Server - Model Context Protocol with subpackage discovery"
+readme = "README.md"
+license = {text = "GPL-2.0-or-later"}
+authors = [
+    {name = "Mathieu Renard", email = "mathieu.renard@twistedwires.io"}
+]
+requires-python = ">=3.8"
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+]
+keywords = ["slab", "mcp", "model-context-protocol", "arm", "emulator", "security"]
+dependencies = []
+
+[project.optional-dependencies]
+full = [
+    "slab-cortex-m>=0.1.0",
+    "slab-cortex-a>=0.1.0",
+    "slab-timing>=0.1.0",
+    "slab-sidechannels>=0.1.0",
+    "slab-glitch>=0.1.0",
+]
+
+[project.scripts]
+slab-mcp-server = "slab_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/twistedwires/slab"
+Documentation = "https://slab.readthedocs.io/"
+Repository = "https://github.com/twistedwires/slab"
+Issues = "https://github.com/twistedwires/slab/issues"
+
+[tool.setuptools]
+packages = ["slab_mcp"]
+package-dir = {"slab_mcp" = "."}
+
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true

@@ -1,0 +1,58 @@
+STM32H563 TF-M CDC ACM Project
+Copyright 2024-2026 Mathieu Renard <mathieu.renard@twistedwires.io>
+
+This product includes software developed by third parties:
+
+================================================================================
+Trusted Firmware-M (TF-M)
+================================================================================
+Copyright (c) 2017-2024, Arm Limited. All rights reserved.
+SPDX-License-Identifier: BSD-3-Clause
+https://www.trustedfirmware.org/projects/tf-m/
+
+================================================================================
+MCUboot
+================================================================================
+Copyright (c) 2017-2024 Linaro LTD
+Copyright (c) 2017-2024 JUUL Labs
+SPDX-License-Identifier: Apache-2.0
+https://www.mcuboot.com/
+
+================================================================================
+Azure RTOS ThreadX
+================================================================================
+Copyright (c) Microsoft Corporation
+Licensed under Microsoft Software License for Azure RTOS
+STM32H5 is listed as Licensed Hardware
+https://github.com/eclipse-threadx/threadx
+
+================================================================================
+Azure RTOS USBX
+================================================================================
+Copyright (c) Microsoft Corporation
+Licensed under Microsoft Software License for Azure RTOS
+STM32H5 is listed as Licensed Hardware
+https://github.com/eclipse-threadx/usbx
+
+================================================================================
+STM32CubeH5 HAL and CMSIS Device
+================================================================================
+Copyright (c) STMicroelectronics
+Licensed under ST Ultimate Liberty License SLA0044
+Use permitted only with STMicroelectronics microcontrollers
+https://www.st.com/en/embedded-software/stm32cubeh5.html
+
+================================================================================
+ARM CMSIS
+================================================================================
+Copyright (c) ARM Limited. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+https://github.com/ARM-software/CMSIS_5
+
+================================================================================
+Hardware Requirement Notice
+================================================================================
+This software is designed exclusively for STM32H563 microcontrollers.
+The Azure RTOS (ThreadX/USBX) and ST library licenses require use with
+STMicroelectronics hardware. Redistribution of this software for use
+with non-STM32 hardware is not permitted under the third-party licenses.
