@@ -740,16 +740,16 @@ class LEDStatusPro:
         surface.blit(title, (self.x + 5, self.y + 4))
 
         # LEDs in a grid
-        led_size = 10
-        cols = max(1, (self.width - 10) // 55)
+        led_size = 16  # Increased from 10 for better visibility
+        cols = max(1, (self.width - 10) // 70)
         start_y = self.y + 22
 
         for idx, (name, (_, color, state)) in enumerate(self.leds.items()):
             row = idx // cols
             col = idx % cols
 
-            lx = self.x + 8 + col * 55
-            ly = start_y + row * 18
+            lx = self.x + 8 + col * 70
+            ly = start_y + row * 22
 
             if ly + led_size > self.y + self.height:
                 break
