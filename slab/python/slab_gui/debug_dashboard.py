@@ -54,6 +54,8 @@ class Theme:
     ACCENT_YELLOW = (240, 200, 80)
     ACCENT_CYAN = (80, 200, 220)
     ACCENT_MAGENTA = (180, 100, 220)
+    ACCENT_ORANGE = (255, 160, 80)
+    ACCENT_PURPLE = (160, 120, 220)
 
     BUTTON_START = (50, 140, 60)
     BUTTON_START_HOVER = (70, 180, 80)
@@ -236,13 +238,443 @@ class SignalCapture:
 
 
 # =============================================================================
+# Time-Travel Debug: State Recorder
+# =============================================================================
+
+class EventType(Enum):
+    """Types of recorded events."""
+    MEMORY_WRITE = 1
+    MEMORY_READ = 2
+    PC_CHANGE = 3
+    REGISTER_WRITE = 4
+    GPIO_CHANGE = 5
+    UART_TX = 6
+    UART_RX = 7
+
+
+@dataclass
+class DebugEvent:
+    """A single recorded debug event."""
+    timestamp: float
+    event_type: EventType
+    address: int = 0
+    value: int = 0
+    size: int = 1
+    data: bytes = field(default_factory=bytes)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+class StateRecorder:
+    """Records all debug events for time-travel debugging."""
+
+    def __init__(self, max_events: int = 100000):
+        self.events: List[DebugEvent] = []
+        self.max_events = max_events
+        self.start_time: Optional[float] = None
+        self.recording = False
+
+        # Snapshots for efficient state reconstruction
+        self.memory_snapshots: Dict[float, Dict[int, int]] = {}
+        self.snapshot_interval = 1.0  # seconds
+
+        # Current state for live tracking
+        self.memory_state: Dict[int, int] = {}
+        self.register_state: Dict[str, int] = {}
+        self.last_snapshot_time = 0.0
+
+    def start_recording(self):
+        """Start recording events."""
+        self.events.clear()
+        self.memory_snapshots.clear()
+        self.memory_state.clear()
+        self.start_time = time.time()
+        self.last_snapshot_time = self.start_time
+        self.recording = True
+
+    def stop_recording(self):
+        """Stop recording events."""
+        self.recording = False
+        # Take final snapshot
+        if self.events:
+            self._take_snapshot()
+
+    def _take_snapshot(self):
+        """Take a memory snapshot for efficient replay."""
+        now = time.time()
+        self.memory_snapshots[now] = dict(self.memory_state)
+        self.last_snapshot_time = now
+
+    def record_memory_write(self, addr: int, value: int, size: int = 1):
+        """Record a memory write event."""
+        if not self.recording:
+            return
+        now = time.time()
+        self.events.append(DebugEvent(
+            timestamp=now,
+            event_type=EventType.MEMORY_WRITE,
+            address=addr,
+            value=value,
+            size=size
+        ))
+        # Update live state
+        for i in range(size):
+            self.memory_state[addr + i] = (value >> (i * 8)) & 0xFF
+
+        # Periodic snapshot
+        if now - self.last_snapshot_time >= self.snapshot_interval:
+            self._take_snapshot()
+
+        # Trim if too many events
+        if len(self.events) > self.max_events:
+            self.events = self.events[-self.max_events // 2:]
+
+    def record_memory_read(self, addr: int, size: int = 1):
+        """Record a memory read event."""
+        if not self.recording:
+            return
+        self.events.append(DebugEvent(
+            timestamp=time.time(),
+            event_type=EventType.MEMORY_READ,
+            address=addr,
+            size=size
+        ))
+
+    def record_pc(self, pc: int, is_branch: bool = False):
+        """Record a PC change event."""
+        if not self.recording:
+            return
+        self.events.append(DebugEvent(
+            timestamp=time.time(),
+            event_type=EventType.PC_CHANGE,
+            address=pc,
+            metadata={'is_branch': is_branch}
+        ))
+
+    def record_register(self, name: str, value: int):
+        """Record a register write event."""
+        if not self.recording:
+            return
+        self.events.append(DebugEvent(
+            timestamp=time.time(),
+            event_type=EventType.REGISTER_WRITE,
+            value=value,
+            metadata={'name': name}
+        ))
+        self.register_state[name] = value
+
+    def record_gpio(self, port: str, pin: int, value: int):
+        """Record a GPIO change event."""
+        if not self.recording:
+            return
+        self.events.append(DebugEvent(
+            timestamp=time.time(),
+            event_type=EventType.GPIO_CHANGE,
+            address=pin,
+            value=value,
+            metadata={'port': port}
+        ))
+
+    def get_time_range(self) -> Tuple[float, float]:
+        """Get the time range of recorded events."""
+        if not self.events:
+            return (0.0, 0.0)
+        return (self.events[0].timestamp, self.events[-1].timestamp)
+
+    def get_state_at_time(self, target_time: float) -> Tuple[Dict[int, int], List[int]]:
+        """Reconstruct memory state and recent PCs at a given time.
+
+        Returns:
+            (memory_state, recent_pcs) - memory dict and list of recent PC values
+        """
+        # Find nearest snapshot before target_time
+        snapshot_time = None
+        for t in sorted(self.memory_snapshots.keys()):
+            if t <= target_time:
+                snapshot_time = t
+            else:
+                break
+
+        # Start from snapshot or empty
+        if snapshot_time:
+            memory = dict(self.memory_snapshots[snapshot_time])
+        else:
+            memory = {}
+
+        # Apply events from snapshot to target_time
+        recent_pcs = []
+        for event in self.events:
+            if snapshot_time and event.timestamp < snapshot_time:
+                continue
+            if event.timestamp > target_time:
+                break
+
+            if event.event_type == EventType.MEMORY_WRITE:
+                for i in range(event.size):
+                    memory[event.address + i] = (event.value >> (i * 8)) & 0xFF
+            elif event.event_type == EventType.PC_CHANGE:
+                recent_pcs.append(event.address)
+                if len(recent_pcs) > 50:
+                    recent_pcs = recent_pcs[-50:]
+
+        return memory, recent_pcs
+
+    def get_events_in_range(self, start_time: float, end_time: float,
+                            event_type: Optional[EventType] = None) -> List[DebugEvent]:
+        """Get events within a time range, optionally filtered by type."""
+        result = []
+        for event in self.events:
+            if event.timestamp < start_time:
+                continue
+            if event.timestamp > end_time:
+                break
+            if event_type is None or event.event_type == event_type:
+                result.append(event)
+        return result
+
+
+# =============================================================================
+# Time-Travel Debug: Timeline Widget
+# =============================================================================
+
+class TimelineWidget:
+    """Interactive timeline for time-travel debugging."""
+
+    def __init__(self, x: int, y: int, width: int, height: int,
+                 recorder: StateRecorder):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.recorder = recorder
+
+        # Playback state
+        self.playing = False
+        self.playback_speed = 1.0
+        self.current_time: Optional[float] = None
+        self.replay_mode = False
+
+        # UI state
+        self.dragging = False
+        self.hovered = False
+
+        self.font = None
+        self.small_font = None
+
+        # Callbacks
+        self.on_time_change: Optional[Callable[[float], None]] = None
+
+    def init_fonts(self):
+        if PYGAME_AVAILABLE and self.font is None:
+            self.font = pygame.font.Font(None, 16)
+            self.small_font = pygame.font.Font(None, 14)
+
+    def set_time(self, t: float):
+        """Set the current playback time."""
+        start, end = self.recorder.get_time_range()
+        self.current_time = max(start, min(end, t))
+        if self.on_time_change:
+            self.on_time_change(self.current_time)
+
+    def toggle_play(self):
+        """Toggle play/pause."""
+        self.playing = not self.playing
+
+    def step_forward(self, events: int = 1):
+        """Step forward by N events."""
+        if not self.recorder.events or self.current_time is None:
+            return
+        # Find next event after current time
+        for event in self.recorder.events:
+            if event.timestamp > self.current_time:
+                self.set_time(event.timestamp)
+                break
+
+    def step_backward(self, events: int = 1):
+        """Step backward by N events."""
+        if not self.recorder.events or self.current_time is None:
+            return
+        # Find previous event before current time
+        prev_time = None
+        for event in self.recorder.events:
+            if event.timestamp >= self.current_time:
+                break
+            prev_time = event.timestamp
+        if prev_time:
+            self.set_time(prev_time)
+
+    def enter_replay_mode(self):
+        """Enter replay mode at the end of recording."""
+        self.replay_mode = True
+        start, end = self.recorder.get_time_range()
+        self.current_time = end
+
+    def exit_replay_mode(self):
+        """Exit replay mode and return to live view."""
+        self.replay_mode = False
+        self.current_time = None
+        self.playing = False
+
+    def update(self, dt: float):
+        """Update playback position."""
+        if self.playing and self.current_time is not None:
+            start, end = self.recorder.get_time_range()
+            self.current_time += dt * self.playback_speed
+            if self.current_time >= end:
+                self.current_time = end
+                self.playing = False
+            if self.on_time_change:
+                self.on_time_change(self.current_time)
+
+    def handle_event(self, event: 'pygame.event.Event') -> bool:
+        if not PYGAME_AVAILABLE:
+            return False
+
+        mx, my = pygame.mouse.get_pos()
+        in_bounds = (self.x <= mx <= self.x + self.width and
+                     self.y <= my <= self.y + self.height)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if in_bounds and self.recorder.events:
+                self.dragging = True
+                self._set_time_from_x(mx)
+                return True
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.dragging:
+                self.dragging = False
+                return True
+
+        elif event.type == pygame.MOUSEMOTION:
+            self.hovered = in_bounds
+            if self.dragging:
+                self._set_time_from_x(mx)
+                return True
+
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_SPACE and in_bounds:
+                self.toggle_play()
+                return True
+            elif event.key == pygame.K_LEFT and self.replay_mode:
+                self.step_backward()
+                return True
+            elif event.key == pygame.K_RIGHT and self.replay_mode:
+                self.step_forward()
+                return True
+
+        return False
+
+    def _set_time_from_x(self, mx: int):
+        """Set time based on mouse X position."""
+        start, end = self.recorder.get_time_range()
+        if end <= start:
+            return
+        # Calculate time from position
+        timeline_x = self.x + 50
+        timeline_w = self.width - 100
+        ratio = (mx - timeline_x) / timeline_w
+        ratio = max(0, min(1, ratio))
+        self.set_time(start + ratio * (end - start))
+
+    def draw(self, surface: 'pygame.Surface'):
+        if not PYGAME_AVAILABLE:
+            return
+
+        self.init_fonts()
+
+        # Background
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y, self.width, self.height), border_radius=4)
+
+        start, end = self.recorder.get_time_range()
+        duration = end - start
+
+        # Title and status
+        status = "REPLAY" if self.replay_mode else "LIVE"
+        status_color = Theme.ACCENT_ORANGE if self.replay_mode else Theme.ACCENT_GREEN
+        title_surf = self.font.render(f"Timeline [{status}]", True, status_color)
+        surface.blit(title_surf, (self.x + 8, self.y + 4))
+
+        # Event count
+        count_text = f"{len(self.recorder.events)} events"
+        count_surf = self.small_font.render(count_text, True, Theme.TEXT_DIM)
+        surface.blit(count_surf, (self.x + self.width - 80, self.y + 5))
+
+        if not self.recorder.events:
+            # No events message
+            msg = "Recording..." if self.recorder.recording else "No events"
+            msg_surf = self.font.render(msg, True, Theme.TEXT_DIM)
+            surface.blit(msg_surf, (self.x + self.width // 2 - 30, self.y + self.height // 2 - 6))
+            return
+
+        # Timeline bar
+        timeline_x = self.x + 50
+        timeline_w = self.width - 100
+        timeline_y = self.y + 24
+        timeline_h = 12
+
+        # Background bar
+        pygame.draw.rect(surface, Theme.BG_SECONDARY,
+                        (timeline_x, timeline_y, timeline_w, timeline_h), border_radius=3)
+
+        # Event density visualization
+        if duration > 0:
+            bucket_count = min(timeline_w, 100)
+            bucket_size = duration / bucket_count
+            buckets = [0] * bucket_count
+
+            for event in self.recorder.events:
+                idx = int((event.timestamp - start) / bucket_size)
+                idx = max(0, min(bucket_count - 1, idx))
+                buckets[idx] += 1
+
+            max_bucket = max(buckets) if buckets else 1
+            for i, count in enumerate(buckets):
+                if count > 0:
+                    intensity = count / max_bucket
+                    bar_h = int(timeline_h * intensity)
+                    bar_x = timeline_x + int(i * timeline_w / bucket_count)
+                    color = (int(60 + 140 * intensity), int(100 + 80 * intensity), 120)
+                    pygame.draw.rect(surface, color,
+                                   (bar_x, timeline_y + timeline_h - bar_h,
+                                    max(1, timeline_w // bucket_count - 1), bar_h))
+
+        # Current position marker
+        if self.current_time is not None and duration > 0:
+            pos_ratio = (self.current_time - start) / duration
+            pos_x = timeline_x + int(pos_ratio * timeline_w)
+            pygame.draw.rect(surface, Theme.ACCENT_RED,
+                           (pos_x - 2, timeline_y - 2, 4, timeline_h + 4), border_radius=2)
+
+        # Time labels
+        if duration > 0:
+            start_label = "0.0s"
+            end_label = f"{duration:.1f}s"
+            start_surf = self.small_font.render(start_label, True, Theme.TEXT_DIM)
+            end_surf = self.small_font.render(end_label, True, Theme.TEXT_DIM)
+            surface.blit(start_surf, (timeline_x, timeline_y + timeline_h + 2))
+            surface.blit(end_surf, (timeline_x + timeline_w - 30, timeline_y + timeline_h + 2))
+
+            # Current time
+            if self.current_time is not None:
+                cur_label = f"{self.current_time - start:.2f}s"
+                cur_surf = self.font.render(cur_label, True, Theme.TEXT_PRIMARY)
+                surface.blit(cur_surf, (self.x + self.width // 2 - 20, timeline_y + timeline_h + 2))
+
+        # Playback controls hint
+        if self.replay_mode:
+            hint = "[Space] Play  [<][>] Step"
+            hint_surf = self.small_font.render(hint, True, Theme.TEXT_DIM)
+            surface.blit(hint_surf, (self.x + 8, self.y + self.height - 14))
+
+
+# =============================================================================
 # Input Field Widget
 # =============================================================================
 
 class InputField:
     """Text input field with cursor and selection."""
 
-    def __init__(self, x: int, y: int, width: int, height: int = 22):
+    def __init__(self, x: int, y: int, width: int, height: int = 28):
         self.rect = pygame.Rect(x, y, width, height) if PYGAME_AVAILABLE else None
         self.text = ""
         self.cursor_pos = 0
@@ -261,7 +693,7 @@ class InputField:
 
     def init_fonts(self):
         if PYGAME_AVAILABLE and self.font is None:
-            self.font = pygame.font.Font(None, 18)
+            self.font = pygame.font.Font(None, 22)
 
     def handle_event(self, event: 'pygame.event.Event') -> bool:
         if not PYGAME_AVAILABLE or not self.rect:
@@ -369,10 +801,10 @@ class ConsoleWidget:
 
         self.font = None
         self.title_font = None
-        self.line_height = 15
+        self.line_height = 22
 
         # Input field at bottom
-        input_height = 24
+        input_height = 28
         self.input = InputField(x + 2, y + height - input_height - 2, width - 4, input_height)
         self.input.placeholder = f"Send to {title}..."
 
@@ -381,8 +813,8 @@ class ConsoleWidget:
 
     def init_fonts(self):
         if PYGAME_AVAILABLE and self.font is None:
-            self.font = pygame.font.Font(None, 15)
-            self.title_font = pygame.font.Font(None, 18)
+            self.font = pygame.font.Font(None, 22)
+            self.title_font = pygame.font.Font(None, 26)
             self.input.on_submit = self._on_input_submit
 
     def _on_input_submit(self, text: str):
@@ -432,17 +864,17 @@ class ConsoleWidget:
 
         # Title bar
         pygame.draw.rect(surface, Theme.BG_TERTIARY,
-                        (self.x, self.y, self.width, 22), border_radius=4)
+                        (self.x, self.y, self.width, 28), border_radius=4)
         pygame.draw.rect(surface, Theme.BG_TERTIARY,
-                        (self.x, self.y + 10, self.width, 12))
+                        (self.x, self.y + 14, self.width, 14))
 
         # Title
         title_surf = self.title_font.render(self.title, True, self.color)
-        surface.blit(title_surf, (self.x + 8, self.y + 4))
+        surface.blit(title_surf, (self.x + 8, self.y + 5))
 
         # Content area
-        content_y = self.y + 25
-        content_height = self.height - 52  # Leave room for input
+        content_y = self.y + 32
+        content_height = self.height - 65  # Leave room for input
         max_lines = content_height // self.line_height
 
         # Draw lines
@@ -453,8 +885,8 @@ class ConsoleWidget:
 
         for idx, line in enumerate(visible_lines):
             line_y = content_y + idx * self.line_height
-            # Truncate
-            max_chars = (self.width - 16) // 7
+            # Truncate for larger font (approx 10px per char)
+            max_chars = (self.width - 20) // 10
             display_line = line[:max_chars]
             text_surf = self.font.render(display_line, True, Theme.TEXT_SECONDARY)
             surface.blit(text_surf, (self.x + 8, line_y))
@@ -777,6 +1209,873 @@ class LEDStatusPro:
         # Border
         pygame.draw.rect(surface, Theme.BORDER,
                         (self.x, self.y, self.width, self.height), 1, border_radius=4)
+
+
+# =============================================================================
+# Detached Window for Widgets
+# =============================================================================
+
+class DetachedWindow:
+    """A separate window for a detached widget."""
+
+    _windows: List['DetachedWindow'] = []  # Track all detached windows
+
+    def __init__(self, widget, title: str, width: int = 600, height: int = 500):
+        self.widget = widget
+        self.title = title
+        self.width = width
+        self.height = height
+        self.running = True
+        self.screen = None
+        self.clock = None
+
+        # Save original widget position
+        self.orig_x = widget.x
+        self.orig_y = widget.y
+        self.orig_width = widget.width
+        self.orig_height = widget.height
+
+        # Start in a thread
+        self.thread = threading.Thread(target=self._run_window, daemon=True)
+        self.thread.start()
+        DetachedWindow._windows.append(self)
+
+    def _run_window(self):
+        """Run the detached window in its own thread."""
+        if not PYGAME_AVAILABLE:
+            return
+
+        # Create new window (pygame can only have one display, so we use a subsurface approach)
+        # For true multi-window, we'd need a different approach
+        # Instead, we'll just mark the widget as detached and draw it larger in main window
+        pass
+
+    def close(self):
+        """Close the detached window."""
+        self.running = False
+        # Restore original position
+        self.widget.x = self.orig_x
+        self.widget.y = self.orig_y
+        self.widget.width = self.orig_width
+        self.widget.height = self.orig_height
+        if self in DetachedWindow._windows:
+            DetachedWindow._windows.remove(self)
+
+    @classmethod
+    def update_all(cls):
+        """Update all detached windows."""
+        for win in cls._windows:
+            if win.running and win.screen:
+                win._draw()
+
+    def _draw(self):
+        """Draw the detached window."""
+        pass
+
+
+# =============================================================================
+# Memory View Widget (Hexdump style)
+# =============================================================================
+
+class MemoryViewWidget:
+    """Hexdump-style memory viewer with hotspot highlighting."""
+
+    def __init__(self, x: int, y: int, width: int, height: int,
+                 title: str = "Memory", base_addr: int = 0x20000000,
+                 bytes_per_row: int = 8):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.title = title
+        self.base_addr = base_addr
+
+        # Memory data (address -> byte value)
+        self.memory: Dict[int, int] = {}
+        # Access counts for hotspot tracking (address -> count)
+        self.access_counts: Dict[int, int] = {}
+        # Recent accesses for highlighting (address -> timestamp)
+        self.recent_accesses: Dict[int, float] = {}
+
+        self.scroll_offset = 0
+        # Bytes per row - auto-calculate based on width if not specified
+        self.bytes_per_row = bytes_per_row
+        self.max_hotspot = 1
+
+        self.font = None
+        self.title_font = None
+        self.char_width = 10  # Approximate monospace char width for 24pt font
+
+        # Scrollbar state
+        self.scrollbar_dragging = False
+        self.scrollbar_rect = None  # Set during draw
+        self.thumb_rect = None
+        self.max_scroll = 1
+
+        # Detached window
+        self.detached = False
+        self.detached_window = None
+
+    def init_fonts(self):
+        if PYGAME_AVAILABLE and self.font is None:
+            self.font = pygame.font.Font(None, 24)  # Large font for readability
+            self.title_font = pygame.font.Font(None, 28)
+            # Measure actual char width
+            test_surf = self.font.render("0", True, (255, 255, 255))
+            self.char_width = test_surf.get_width()
+
+    def write(self, addr: int, value: int, size: int = 1):
+        """Write value to memory and track access."""
+        for i in range(size):
+            byte_addr = addr + i
+            byte_val = (value >> (i * 8)) & 0xFF
+            self.memory[byte_addr] = byte_val
+            self.access_counts[byte_addr] = self.access_counts.get(byte_addr, 0) + 1
+            self.recent_accesses[byte_addr] = time.time()
+            self.max_hotspot = max(self.max_hotspot, self.access_counts[byte_addr])
+
+    def read_access(self, addr: int, size: int = 1):
+        """Track a read access for hotspot highlighting."""
+        for i in range(size):
+            byte_addr = addr + i
+            self.access_counts[byte_addr] = self.access_counts.get(byte_addr, 0) + 1
+            self.recent_accesses[byte_addr] = time.time()
+            self.max_hotspot = max(self.max_hotspot, self.access_counts[byte_addr])
+
+    def set_memory_block(self, addr: int, data: bytes):
+        """Set a block of memory."""
+        for i, b in enumerate(data):
+            self.memory[addr + i] = b
+
+    def handle_event(self, event: 'pygame.event.Event') -> bool:
+        if not PYGAME_AVAILABLE:
+            return False
+
+        mx, my = pygame.mouse.get_pos()
+        in_widget = self.x <= mx <= self.x + self.width and self.y <= my <= self.y + self.height
+
+        # Scrollbar dragging
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Check detach button (top-right corner)
+            detach_btn_x = self.x + self.width - 24
+            detach_btn_y = self.y + 4
+            if detach_btn_x <= mx <= detach_btn_x + 20 and detach_btn_y <= my <= detach_btn_y + 20:
+                self.toggle_detach()
+                return True
+
+            # Check scrollbar click
+            if self.scrollbar_rect and self.scrollbar_rect.collidepoint(mx, my):
+                self.scrollbar_dragging = True
+                self._update_scroll_from_mouse(my)
+                return True
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.scrollbar_dragging = False
+
+        elif event.type == pygame.MOUSEMOTION:
+            if self.scrollbar_dragging and self.scrollbar_rect:
+                self._update_scroll_from_mouse(my)
+                return True
+
+        elif event.type == pygame.MOUSEWHEEL:
+            if in_widget:
+                self.scroll_offset = max(0, min(self.max_scroll, self.scroll_offset - event.y * 2))
+                return True
+
+        return False
+
+    def _update_scroll_from_mouse(self, mouse_y: int):
+        """Update scroll position based on mouse Y position."""
+        if not self.scrollbar_rect:
+            return
+        # Calculate scroll position from mouse
+        scroll_area_top = self.scrollbar_rect.top
+        scroll_area_height = self.scrollbar_rect.height
+        rel_y = mouse_y - scroll_area_top
+        ratio = max(0, min(1, rel_y / scroll_area_height))
+        self.scroll_offset = int(ratio * self.max_scroll)
+
+    def toggle_detach(self):
+        """Toggle detached window mode."""
+        self.detached = not self.detached
+        if self.detached and PYGAME_AVAILABLE:
+            # Create detached window
+            self.detached_window = DetachedWindow(self, self.title, 500, 600)
+        elif self.detached_window:
+            self.detached_window.close()
+            self.detached_window = None
+
+    def draw(self, surface: 'pygame.Surface'):
+        if not PYGAME_AVAILABLE:
+            return
+
+        self.init_fonts()
+        now = time.time()
+
+        # Background
+        pygame.draw.rect(surface, Theme.BG_SECONDARY,
+                        (self.x, self.y, self.width, self.height), border_radius=4)
+
+        # Title bar
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y, self.width, 28), border_radius=4)
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y + 14, self.width, 14))
+
+        title_surf = self.title_font.render(self.title, True, Theme.ACCENT_CYAN)
+        surface.blit(title_surf, (self.x + 8, self.y + 5))
+
+        # Content area
+        content_y = self.y + 32
+        content_height = self.height - 38
+        row_height = 24  # Large row height for 24pt font
+        max_rows = content_height // row_height
+
+        # Get sorted addresses
+        if self.memory:
+            min_addr = min(self.memory.keys()) // self.bytes_per_row * self.bytes_per_row
+            max_addr = max(self.memory.keys())
+        else:
+            min_addr = self.base_addr
+            max_addr = self.base_addr + 256
+
+        # Calculate visible rows
+        start_row = self.scroll_offset
+        visible_rows = []
+
+        for row in range(start_row, start_row + max_rows):
+            row_addr = min_addr + row * self.bytes_per_row
+            if row_addr > max_addr + self.bytes_per_row:
+                break
+            visible_rows.append(row_addr)
+
+        # Calculate layout
+        addr_width = self.char_width * 9  # "XXXXXXXX "
+        hex_spacing = self.char_width * 3  # "XX "
+        ascii_width = self.char_width * self.bytes_per_row
+
+        # Draw rows
+        for idx, row_addr in enumerate(visible_rows):
+            y_pos = content_y + idx * row_height
+
+            # Address (yellow)
+            addr_text = f"{row_addr:08X}"
+            addr_surf = self.font.render(addr_text, True, Theme.ACCENT_YELLOW)
+            surface.blit(addr_surf, (self.x + 4, y_pos))
+
+            # Hex bytes
+            hex_x = self.x + 4 + addr_width
+            ascii_str = ""
+
+            for i in range(self.bytes_per_row):
+                byte_addr = row_addr + i
+                byte_val = self.memory.get(byte_addr, 0)
+                access_count = self.access_counts.get(byte_addr, 0)
+                last_access = self.recent_accesses.get(byte_addr, 0)
+
+                # Determine color based on hotspot intensity
+                if access_count > 0:
+                    intensity = min(1.0, access_count / max(1, self.max_hotspot * 0.5))
+                    # Recent access (< 0.5s) = bright highlight
+                    if now - last_access < 0.5:
+                        color = (255, 100, 100)  # Bright red for very recent
+                    elif now - last_access < 2.0:
+                        color = (255, 180, 100)  # Orange for recent
+                    else:
+                        # Gradient from dim to bright based on access count
+                        r = int(60 + 140 * intensity)
+                        g = int(60 + 60 * intensity)
+                        b = 80
+                        color = (r, g, b)
+                else:
+                    color = Theme.TEXT_DIM
+
+                hex_text = f"{byte_val:02X}"
+                hex_surf = self.font.render(hex_text, True, color)
+                byte_x = hex_x + i * hex_spacing
+                # Only draw if within bounds
+                if byte_x + hex_spacing < self.x + self.width - 4:
+                    surface.blit(hex_surf, (byte_x, y_pos))
+
+                # ASCII
+                if 32 <= byte_val < 127:
+                    ascii_str += chr(byte_val)
+                else:
+                    ascii_str += "."
+
+            # ASCII column (only if space permits)
+            ascii_x = hex_x + self.bytes_per_row * hex_spacing + 4
+            if ascii_x + ascii_width < self.x + self.width - 12:
+                ascii_surf = self.font.render(ascii_str, True, Theme.TEXT_DIM)
+                surface.blit(ascii_surf, (ascii_x, y_pos))
+
+        # Scrollbar (wider, clickable)
+        total_rows = (max_addr - min_addr) // self.bytes_per_row + 1
+        self.max_scroll = max(1, total_rows - max_rows)
+        if total_rows > max_rows:
+            scroll_x = self.x + self.width - 16
+            scroll_height = content_height
+            thumb_height = max(30, scroll_height * max_rows // total_rows)
+            thumb_pos = int((scroll_height - thumb_height) * self.scroll_offset / max(1, self.max_scroll))
+
+            # Save scrollbar rect for click detection
+            self.scrollbar_rect = pygame.Rect(scroll_x, content_y, 12, scroll_height)
+            self.thumb_rect = pygame.Rect(scroll_x, content_y + thumb_pos, 12, thumb_height)
+
+            # Draw scrollbar track
+            pygame.draw.rect(surface, Theme.SCROLLBAR,
+                           (scroll_x, content_y, 12, scroll_height), border_radius=6)
+            # Draw thumb (highlighted if dragging)
+            thumb_color = Theme.ACCENT_BLUE if self.scrollbar_dragging else Theme.SCROLLBAR_THUMB
+            pygame.draw.rect(surface, thumb_color,
+                           (scroll_x, content_y + thumb_pos, 12, thumb_height), border_radius=6)
+        else:
+            self.scrollbar_rect = None
+            self.thumb_rect = None
+
+        # Detach button (top-right)
+        btn_x = self.x + self.width - 24
+        btn_y = self.y + 4
+        btn_color = Theme.ACCENT_CYAN if self.detached else Theme.TEXT_DIM
+        pygame.draw.rect(surface, btn_color, (btn_x, btn_y, 18, 18), 2, border_radius=3)
+        # Draw window icon
+        pygame.draw.line(surface, btn_color, (btn_x + 4, btn_y + 6), (btn_x + 14, btn_y + 6), 2)
+        pygame.draw.rect(surface, btn_color, (btn_x + 4, btn_y + 6, 10, 8), 1)
+
+        # Border
+        pygame.draw.rect(surface, Theme.BORDER,
+                        (self.x, self.y, self.width, self.height), 1, border_radius=4)
+
+
+# =============================================================================
+# PC Tracker Widget (Execution Flow)
+# =============================================================================
+
+class PCTrackerWidget:
+    """Program Counter tracker showing execution flow over time."""
+
+    def __init__(self, x: int, y: int, width: int, height: int,
+                 title: str = "PC Tracker"):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.title = title
+
+        # PC history: list of (timestamp, pc_value, is_branch)
+        self.pc_history: deque = deque(maxlen=10000)
+        # Region labels for annotation
+        self.regions: Dict[Tuple[int, int], str] = {}
+        # Hotspot tracking
+        self.pc_counts: Dict[int, int] = {}
+        self.max_pc_count = 1
+
+        self.scroll_offset = 0
+        self.auto_scroll = True
+        self.view_mode = "list"  # "list" or "graph"
+
+        self.font = None
+        self.title_font = None
+
+        # Scrollbar state
+        self.scrollbar_dragging = False
+        self.scrollbar_rect = None
+        self.max_scroll = 1
+
+        # Detach support
+        self.detached = False
+
+    def init_fonts(self):
+        if PYGAME_AVAILABLE and self.font is None:
+            self.font = pygame.font.Font(None, 24)  # Large font for readability
+            self.title_font = pygame.font.Font(None, 28)
+
+    def add_region(self, start: int, end: int, name: str):
+        """Add a named memory region for PC annotation."""
+        self.regions[(start, end)] = name
+
+    def record(self, pc: int, is_branch: bool = False):
+        """Record a PC value."""
+        self.pc_history.append((time.time(), pc, is_branch))
+        self.pc_counts[pc] = self.pc_counts.get(pc, 0) + 1
+        self.max_pc_count = max(self.max_pc_count, self.pc_counts[pc])
+        if self.auto_scroll:
+            self.scroll_offset = 0
+
+    def get_region_name(self, pc: int) -> str:
+        """Get region name for a PC value."""
+        for (start, end), name in self.regions.items():
+            if start <= pc < end:
+                return name
+        return ""
+
+    def handle_event(self, event: 'pygame.event.Event') -> bool:
+        if not PYGAME_AVAILABLE:
+            return False
+
+        mx, my = pygame.mouse.get_pos()
+        in_widget = self.x <= mx <= self.x + self.width and self.y <= my <= self.y + self.height
+
+        # Scrollbar and detach button handling
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Check detach button (top-right corner, before stats)
+            detach_btn_x = self.x + self.width - 130
+            detach_btn_y = self.y + 4
+            if detach_btn_x <= mx <= detach_btn_x + 20 and detach_btn_y <= my <= detach_btn_y + 20:
+                self.detached = not self.detached
+                return True
+
+            # Check scrollbar click
+            if self.scrollbar_rect and self.scrollbar_rect.collidepoint(mx, my):
+                self.scrollbar_dragging = True
+                self._update_scroll_from_mouse(my)
+                return True
+
+        elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self.scrollbar_dragging = False
+
+        elif event.type == pygame.MOUSEMOTION:
+            if self.scrollbar_dragging and self.scrollbar_rect:
+                self._update_scroll_from_mouse(my)
+                return True
+
+        elif event.type == pygame.MOUSEWHEEL:
+            if in_widget:
+                self.scroll_offset = max(0, min(self.max_scroll, self.scroll_offset - event.y * 3))
+                self.auto_scroll = (self.scroll_offset == 0)
+                return True
+
+        return False
+
+    def _update_scroll_from_mouse(self, mouse_y: int):
+        """Update scroll position based on mouse Y position."""
+        if not self.scrollbar_rect:
+            return
+        scroll_area_top = self.scrollbar_rect.top
+        scroll_area_height = self.scrollbar_rect.height
+        rel_y = mouse_y - scroll_area_top
+        ratio = max(0, min(1, rel_y / scroll_area_height))
+        self.scroll_offset = int(ratio * self.max_scroll)
+        self.auto_scroll = (self.scroll_offset == 0)
+
+    def draw(self, surface: 'pygame.Surface'):
+        if not PYGAME_AVAILABLE:
+            return
+
+        self.init_fonts()
+
+        # Background
+        pygame.draw.rect(surface, Theme.BG_SECONDARY,
+                        (self.x, self.y, self.width, self.height), border_radius=4)
+
+        # Title bar
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y, self.width, 28), border_radius=4)
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y + 14, self.width, 14))
+
+        title_surf = self.title_font.render(self.title, True, Theme.ACCENT_PURPLE)
+        surface.blit(title_surf, (self.x + 8, self.y + 5))
+
+        # Stats
+        stats_text = f"{len(self.pc_history)} samples"
+        stats_surf = self.font.render(stats_text, True, Theme.TEXT_DIM)
+        surface.blit(stats_surf, (self.x + self.width - 100, self.y + 6))
+
+        # Content area
+        content_y = self.y + 32
+        content_height = self.height - 38
+
+        if self.view_mode == "list":
+            self._draw_list_view(surface, content_y, content_height)
+        else:
+            self._draw_graph_view(surface, content_y, content_height)
+
+        # Scrollbar (for list view)
+        row_height = 24
+        max_rows = content_height // row_height
+        total_items = len(self.pc_history)
+        self.max_scroll = max(1, total_items - max_rows)
+
+        if total_items > max_rows:
+            scroll_x = self.x + self.width - 16
+            scroll_height = content_height
+            thumb_height = max(30, scroll_height * max_rows // total_items)
+            thumb_pos = int((scroll_height - thumb_height) * self.scroll_offset / max(1, self.max_scroll))
+
+            self.scrollbar_rect = pygame.Rect(scroll_x, content_y, 12, scroll_height)
+
+            pygame.draw.rect(surface, Theme.SCROLLBAR,
+                           (scroll_x, content_y, 12, scroll_height), border_radius=6)
+            thumb_color = Theme.ACCENT_BLUE if self.scrollbar_dragging else Theme.SCROLLBAR_THUMB
+            pygame.draw.rect(surface, thumb_color,
+                           (scroll_x, content_y + thumb_pos, 12, thumb_height), border_radius=6)
+        else:
+            self.scrollbar_rect = None
+
+        # Detach button (top-right, before stats)
+        btn_x = self.x + self.width - 130
+        btn_y = self.y + 4
+        btn_color = Theme.ACCENT_PURPLE if self.detached else Theme.TEXT_DIM
+        pygame.draw.rect(surface, btn_color, (btn_x, btn_y, 18, 18), 2, border_radius=3)
+        pygame.draw.line(surface, btn_color, (btn_x + 4, btn_y + 6), (btn_x + 14, btn_y + 6), 2)
+        pygame.draw.rect(surface, btn_color, (btn_x + 4, btn_y + 6, 10, 8), 1)
+
+        # Border
+        pygame.draw.rect(surface, Theme.BORDER,
+                        (self.x, self.y, self.width, self.height), 1, border_radius=4)
+
+    def _draw_list_view(self, surface: 'pygame.Surface', content_y: int, content_height: int):
+        """Draw PC history as a list."""
+        row_height = 24  # Large row height for 24pt font
+        max_rows = content_height // row_height
+
+        history = list(self.pc_history)
+        if self.scroll_offset > 0:
+            history = history[:-self.scroll_offset] if self.scroll_offset < len(history) else []
+        history = history[-max_rows:]
+
+        for idx, (ts, pc, is_branch) in enumerate(history):
+            y_pos = content_y + idx * row_height
+
+            # Hotspot intensity
+            count = self.pc_counts.get(pc, 1)
+            intensity = min(1.0, count / max(1, self.max_pc_count * 0.3))
+
+            # Color based on branch and hotspot
+            if is_branch:
+                color = Theme.ACCENT_ORANGE
+            else:
+                r = int(100 + 120 * intensity)
+                g = int(100 + 80 * intensity)
+                b = int(100 + 50 * intensity)
+                color = (r, g, b)
+
+            # PC value
+            pc_text = f"0x{pc:08X}"
+            pc_surf = self.font.render(pc_text, True, color)
+            surface.blit(pc_surf, (self.x + 6, y_pos))
+
+            # Region name
+            region = self.get_region_name(pc)
+            if region:
+                region_surf = self.font.render(region[:12], True, Theme.ACCENT_CYAN)
+                surface.blit(region_surf, (self.x + 120, y_pos))
+
+            # Count indicator (bar)
+            bar_width = int(40 * intensity)
+            if bar_width > 0:
+                bar_color = (int(80 + 100 * intensity), 60, 60)
+                pygame.draw.rect(surface, bar_color,
+                               (self.x + self.width - 50, y_pos + 4, bar_width, 12))
+
+    def _draw_graph_view(self, surface: 'pygame.Surface', content_y: int, content_height: int):
+        """Draw PC history as a graph (address over time)."""
+        if len(self.pc_history) < 2:
+            return
+
+        # Get min/max PC for scaling
+        pcs = [pc for _, pc, _ in self.pc_history]
+        min_pc = min(pcs)
+        max_pc = max(pcs)
+        pc_range = max(1, max_pc - min_pc)
+
+        graph_width = self.width - 10
+        graph_height = content_height - 10
+
+        # Draw points
+        points = []
+        history = list(self.pc_history)[-graph_width:]
+
+        for i, (ts, pc, is_branch) in enumerate(history):
+            x = self.x + 5 + i
+            y = content_y + graph_height - int((pc - min_pc) / pc_range * graph_height)
+            points.append((x, y))
+
+            # Highlight branches
+            if is_branch:
+                pygame.draw.circle(surface, Theme.ACCENT_ORANGE, (x, y), 2)
+
+        # Draw line connecting points
+        if len(points) > 1:
+            pygame.draw.lines(surface, Theme.ACCENT_GREEN, False, points, 1)
+
+
+# =============================================================================
+# QEMU Control Widget (GDB Server)
+# =============================================================================
+
+class QemuControlWidget:
+    """QEMU control panel using GDB server protocol."""
+
+    def __init__(self, x: int, y: int, width: int, height: int,
+                 gdb_host: str = "127.0.0.1", gdb_port: int = 1234):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.gdb_host = gdb_host
+        self.gdb_port = gdb_port
+
+        # Connection state
+        self.socket = None
+        self.connected = False
+        self.running = False  # CPU running state
+        self.last_error = ""
+
+        # Register cache
+        self.registers: Dict[str, int] = {}
+        self.pc = 0
+
+        # Button rects
+        self.btn_connect = None
+        self.btn_run = None
+        self.btn_stop = None
+        self.btn_step = None
+
+        self.font = None
+        self.title_font = None
+        self.small_font = None
+
+        # Callbacks
+        self.on_stop: Optional[Callable[[int], None]] = None  # Called with PC when stopped
+        self.on_step: Optional[Callable[[int], None]] = None
+
+    def init_fonts(self):
+        if PYGAME_AVAILABLE and self.font is None:
+            self.font = pygame.font.Font(None, 18)
+            self.title_font = pygame.font.Font(None, 22)
+            self.small_font = pygame.font.Font(None, 16)
+
+            # Create button rects
+            btn_w = (self.width - 20) // 4
+            btn_h = 28
+            btn_y = self.y + 30
+            self.btn_connect = pygame.Rect(self.x + 5, btn_y, btn_w - 2, btn_h)
+            self.btn_run = pygame.Rect(self.x + 5 + btn_w, btn_y, btn_w - 2, btn_h)
+            self.btn_stop = pygame.Rect(self.x + 5 + 2 * btn_w, btn_y, btn_w - 2, btn_h)
+            self.btn_step = pygame.Rect(self.x + 5 + 3 * btn_w, btn_y, btn_w - 2, btn_h)
+
+    def connect(self) -> bool:
+        """Connect to QEMU GDB server."""
+        import socket
+        try:
+            self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(2.0)
+            self.socket.connect((self.gdb_host, self.gdb_port))
+            self.socket.settimeout(0.5)
+            self.connected = True
+            self.last_error = ""
+            # Initial handshake
+            self._send_packet("qSupported")
+            self._recv_packet()
+            return True
+        except Exception as e:
+            self.last_error = str(e)
+            self.connected = False
+            if self.socket:
+                self.socket.close()
+                self.socket = None
+            return False
+
+    def disconnect(self):
+        """Disconnect from GDB server."""
+        if self.socket:
+            try:
+                self.socket.close()
+            except:
+                pass
+            self.socket = None
+        self.connected = False
+
+    def _checksum(self, data: str) -> str:
+        """Calculate GDB packet checksum."""
+        return f"{sum(ord(c) for c in data) & 0xFF:02x}"
+
+    def _send_packet(self, data: str):
+        """Send a GDB packet."""
+        if not self.socket:
+            return
+        packet = f"${data}#{self._checksum(data)}"
+        self.socket.send(packet.encode())
+
+    def _recv_packet(self) -> str:
+        """Receive a GDB packet."""
+        if not self.socket:
+            return ""
+        try:
+            data = self.socket.recv(4096).decode()
+            # Parse packet (skip +/- acks)
+            if '$' in data:
+                start = data.index('$') + 1
+                end = data.index('#', start)
+                return data[start:end]
+            return data
+        except:
+            return ""
+
+    def cmd_continue(self):
+        """Continue execution."""
+        if not self.connected:
+            return
+        self._send_packet("c")
+        self.running = True
+
+    def cmd_stop(self):
+        """Stop/break execution."""
+        if not self.connected or not self.socket:
+            return
+        # Send break (Ctrl+C)
+        self.socket.send(b'\x03')
+        self.running = False
+        # Read stop reply
+        reply = self._recv_packet()
+        self._update_pc()
+        if self.on_stop:
+            self.on_stop(self.pc)
+
+    def cmd_step(self):
+        """Single step."""
+        if not self.connected:
+            return
+        self._send_packet("s")
+        self.running = False
+        reply = self._recv_packet()
+        self._update_pc()
+        if self.on_step:
+            self.on_step(self.pc)
+
+    def _update_pc(self):
+        """Read PC register."""
+        if not self.connected:
+            return
+        # Read registers (ARM Cortex-M: r15 is PC)
+        self._send_packet("g")
+        reply = self._recv_packet()
+        if reply and len(reply) >= 128:
+            # PC is at offset 15*8 = 120 in hex dump (32-bit little endian)
+            try:
+                pc_hex = reply[120:128]
+                # Convert from little-endian
+                pc_bytes = bytes.fromhex(pc_hex)
+                self.pc = int.from_bytes(pc_bytes, 'little')
+            except:
+                pass
+
+    def read_memory(self, addr: int, size: int) -> bytes:
+        """Read memory from target."""
+        if not self.connected:
+            return b''
+        self._send_packet(f"m{addr:x},{size:x}")
+        reply = self._recv_packet()
+        if reply and reply != "E00":
+            try:
+                return bytes.fromhex(reply)
+            except:
+                pass
+        return b''
+
+    def handle_event(self, event: 'pygame.event.Event') -> bool:
+        if not PYGAME_AVAILABLE:
+            return False
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mx, my = event.pos
+
+            if self.btn_connect and self.btn_connect.collidepoint(mx, my):
+                if self.connected:
+                    self.disconnect()
+                else:
+                    self.connect()
+                return True
+
+            if self.connected:
+                if self.btn_run and self.btn_run.collidepoint(mx, my):
+                    self.cmd_continue()
+                    return True
+                if self.btn_stop and self.btn_stop.collidepoint(mx, my):
+                    self.cmd_stop()
+                    return True
+                if self.btn_step and self.btn_step.collidepoint(mx, my):
+                    self.cmd_step()
+                    return True
+
+        return False
+
+    def draw(self, surface: 'pygame.Surface'):
+        if not PYGAME_AVAILABLE:
+            return
+
+        self.init_fonts()
+
+        # Background
+        pygame.draw.rect(surface, Theme.BG_SECONDARY,
+                        (self.x, self.y, self.width, self.height), border_radius=4)
+
+        # Title bar
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y, self.width, 24), border_radius=4)
+        pygame.draw.rect(surface, Theme.BG_TERTIARY,
+                        (self.x, self.y + 12, self.width, 12))
+
+        title = "QEMU Control (GDB)"
+        title_surf = self.title_font.render(title, True, Theme.ACCENT_CYAN)
+        surface.blit(title_surf, (self.x + 8, self.y + 3))
+
+        # Connection status
+        status_color = Theme.ACCENT_GREEN if self.connected else Theme.ACCENT_RED
+        status_text = "Connected" if self.connected else "Disconnected"
+        status_surf = self.small_font.render(status_text, True, status_color)
+        surface.blit(status_surf, (self.x + self.width - 80, self.y + 5))
+
+        # Buttons
+        if self.btn_connect:
+            self._draw_button(surface, self.btn_connect,
+                             "Disconnect" if self.connected else "Connect",
+                             Theme.ACCENT_RED if self.connected else Theme.ACCENT_GREEN)
+
+        if self.connected:
+            run_color = Theme.ACCENT_GREEN if not self.running else Theme.BG_TERTIARY
+            stop_color = Theme.ACCENT_RED if self.running else Theme.BG_TERTIARY
+            self._draw_button(surface, self.btn_run, "Run", run_color)
+            self._draw_button(surface, self.btn_stop, "Stop", stop_color)
+            self._draw_button(surface, self.btn_step, "Step", Theme.ACCENT_YELLOW)
+
+            # PC display
+            pc_text = f"PC: 0x{self.pc:08X}"
+            pc_surf = self.font.render(pc_text, True, Theme.TEXT_PRIMARY)
+            surface.blit(pc_surf, (self.x + 8, self.y + 65))
+
+            # Running indicator
+            state_text = "Running..." if self.running else "Stopped"
+            state_color = Theme.ACCENT_ORANGE if self.running else Theme.ACCENT_CYAN
+            state_surf = self.font.render(state_text, True, state_color)
+            surface.blit(state_surf, (self.x + 150, self.y + 65))
+
+        # Error message
+        if self.last_error:
+            err_surf = self.small_font.render(self.last_error[:40], True, Theme.ACCENT_RED)
+            surface.blit(err_surf, (self.x + 8, self.y + self.height - 18))
+
+        # Border
+        pygame.draw.rect(surface, Theme.BORDER,
+                        (self.x, self.y, self.width, self.height), 1, border_radius=4)
+
+    def _draw_button(self, surface: 'pygame.Surface', rect: 'pygame.Rect',
+                     text: str, color: Tuple[int, int, int]):
+        """Draw a button."""
+        # Check hover
+        mx, my = pygame.mouse.get_pos()
+        hovered = rect.collidepoint(mx, my)
+
+        # Button background
+        bg_color = tuple(min(255, c + 30) for c in color) if hovered else color
+        pygame.draw.rect(surface, bg_color, rect, border_radius=4)
+
+        # Button text
+        text_surf = self.small_font.render(text, True, Theme.TEXT_PRIMARY)
+        text_rect = text_surf.get_rect(center=rect.center)
+        surface.blit(text_surf, text_rect)
 
 
 # =============================================================================
@@ -1176,10 +2475,17 @@ __all__ = [
     'SignalTransition',
     'SignalChannel',
     'SignalCapture',
+    'EventType',
+    'DebugEvent',
+    'StateRecorder',
+    'TimelineWidget',
     'InputField',
     'ConsoleWidget',
     'LogicAnalyzerPro',
     'LEDStatusPro',
+    'MemoryViewWidget',
+    'PCTrackerWidget',
+    'QemuControlWidget',
     'ControlPanel',
     'DebugDashboardPro',
     'PYGAME_AVAILABLE',
