@@ -2,11 +2,8 @@
 """
 STM32H563 TrustZone Demo with Debug Dashboard
 
-Clean architecture:
-1. UI starts and displays "Ready - click START"
-2. User clicks START → peripherals initialized, server started, QEMU launched
-3. User clicks STOP → QEMU killed, server stopped
-4. User clicks RESET → full reset, ready for new run
+Auto-start emulation with real-time debug visualization.
+Close the window to stop.
 
 Usage:
     python run_h563_tz_dashboard.py [--verbose]
@@ -33,8 +30,13 @@ import pygame
 from slab_stm32 import STM32H563PeripheralSet
 from slab_gui.debug_dashboard import DebugDashboardPro, SignalCapture
 
-# Paths
-QEMU_BIN = PROJECT_DIR.parent / "qemu" / "build" / "qemu-system-arm"
+# Paths - try multiple QEMU locations
+QEMU_PATHS = [
+    PROJECT_DIR.parent / "qemu" / "build" / "qemu-system-arm",  # Public repo
+    Path("/home/mre/projects/mcuemu/qemu/build/qemu-system-arm"),  # Private repo
+    Path("/usr/bin/qemu-system-arm"),  # System install
+]
+QEMU_BIN = next((p for p in QEMU_PATHS if p.exists()), QEMU_PATHS[0])
 SECURE_FW = SCRIPT_DIR / "stm32h563_tz_cdc" / "build" / "secure_fw.bin"
 
 # Memory map
@@ -239,10 +241,12 @@ class EmulationController:
         """Handle QEMU MMIO requests."""
         log.info("QEMU connected")
         self.dashboard.add_uart_line("QEMU connected")
+        client_ops = 0
 
         try:
             while self.running:
-                header = await asyncio.wait_for(reader.read(9), timeout=0.5)
+                # Longer timeout to avoid spurious disconnects
+                header = await asyncio.wait_for(reader.read(9), timeout=5.0)
                 if len(header) < 9:
                     break
 
@@ -258,6 +262,7 @@ class EmulationController:
                     await reader.read(1)
                     value, status = self.peripherals.read(addr, size) if self.peripherals else (0, 0)
                     self.mmio_count += 1
+                    client_ops += 1
                     writer.write(value.to_bytes(4, 'little') + bytes([status]))
 
                 elif cmd in [ord('W'), ord('T')]:
@@ -265,18 +270,20 @@ class EmulationController:
                     value = int.from_bytes(value_sec[0:4], 'little')
                     status = self.peripherals.write(addr, size, value) if self.peripherals else 0
                     self.mmio_count += 1
+                    client_ops += 1
                     writer.write(bytes([status]))
 
                 await writer.drain()
 
         except asyncio.TimeoutError:
-            pass
+            log.debug(f"Client timeout after {client_ops} ops")
         except Exception as e:
             if self.running:
                 log.error(f"Client error: {e}")
         finally:
             writer.close()
-            log.info(f"QEMU disconnected ({self.mmio_count} ops)")
+            if client_ops > 0:
+                log.info(f"QEMU session: {client_ops} ops (total: {self.mmio_count})")
 
 
 def main():
@@ -292,11 +299,12 @@ def main():
     log.info("STM32H563 TrustZone Debug Dashboard")
     log.info("=" * 60)
 
-    # 1. Create dashboard UI
+    # 1. Create dashboard UI (no control buttons - auto-start mode)
     dashboard = DebugDashboardPro(
         width=1000,
         height=750,
-        title="STM32H563 TrustZone Debug Dashboard"
+        title="STM32H563 TrustZone Debug Dashboard",
+        show_controls=False
     )
 
     # 2. Add LED indicators
@@ -315,28 +323,24 @@ def main():
     # 4. Create emulation controller
     controller = EmulationController(dashboard, verbose=args.verbose)
 
-    # 5. Wire button callbacks
-    dashboard.on_start = controller.start
-    dashboard.on_stop = controller.stop
-    dashboard.on_reset = controller.reset
-
-    # 6. Initialize pygame
+    # 5. Initialize pygame
     dashboard.init_pygame()
 
-    # 7. Show initial state
+    # 6. Show startup message
     dashboard.add_uart_line("STM32H563 TrustZone Emulator")
-    dashboard.add_uart_line("Ready - click START to begin")
-    dashboard.add_cdc_line("Non-Secure console ready")
+    dashboard.add_cdc_line("Non-Secure console")
 
-    log.info("Dashboard ready - waiting for user input")
+    # 7. AUTO-START emulation
+    log.info("Auto-starting emulation...")
+    controller.start()
 
     # 8. Tick callback to update stats
     def tick():
         ops, elapsed, running = controller.get_stats()
         dashboard.update_stats(ops, elapsed)
-        dashboard.control.set_running(running)
 
-    # 9. Run UI loop
+    # 9. Run UI loop until window closed
+    log.info("Running... close window to stop")
     try:
         dashboard.run_loop(tick_callback=tick, fps=30)
     except KeyboardInterrupt:

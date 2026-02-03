@@ -950,10 +950,12 @@ class DebugDashboardPro:
     """
 
     def __init__(self, width: int = 900, height: int = 700,
-                 title: str = "MCUemu Debug Dashboard"):
+                 title: str = "MCUemu Debug Dashboard",
+                 show_controls: bool = True):
         self.width = width
         self.height = height
         self.title = title
+        self.show_controls = show_controls
 
         self.screen = None
         self.clock = None
@@ -975,13 +977,17 @@ class DebugDashboardPro:
     def _create_widgets(self):
         m = 5  # Margin
 
-        # Top row
+        # Top row layout depends on show_controls
         top_h = 80
-        ctrl_w = self.width * 2 // 3 - m
-        led_w = self.width - ctrl_w - 3 * m
-
-        self.control = ControlPanel(m, m, ctrl_w, top_h)
-        self.led_status = LEDStatusPro(ctrl_w + 2 * m, m, led_w, top_h)
+        if self.show_controls:
+            ctrl_w = self.width * 2 // 3 - m
+            led_w = self.width - ctrl_w - 3 * m
+            self.control = ControlPanel(m, m, ctrl_w, top_h)
+            self.led_status = LEDStatusPro(ctrl_w + 2 * m, m, led_w, top_h)
+        else:
+            # No control panel - LED status takes full width
+            self.control = None
+            self.led_status = LEDStatusPro(m, m, self.width - 2 * m, top_h)
 
         # Logic analyzer
         la_y = top_h + 2 * m
@@ -1009,9 +1015,10 @@ class DebugDashboardPro:
         self.running = True
 
         # Wire callbacks
-        self.control.on_start = self._on_start
-        self.control.on_stop = self._on_stop
-        self.control.on_reset = self._on_reset
+        if self.control:
+            self.control.on_start = self._on_start
+            self.control.on_stop = self._on_stop
+            self.control.on_reset = self._on_reset
         self.uart_console.on_input = self._on_uart_input
         self.cdc_console.on_input = self._on_cdc_input
 
@@ -1067,7 +1074,8 @@ class DebugDashboardPro:
         self.cdc_console.add_line(line)
 
     def update_stats(self, ops: int, elapsed: float):
-        self.control.update_stats(ops, elapsed)
+        if self.control:
+            self.control.update_stats(ops, elapsed)
 
     def handle_events(self) -> bool:
         if not PYGAME_AVAILABLE:
@@ -1078,7 +1086,7 @@ class DebugDashboardPro:
                 return False
 
             # Route to widgets
-            if self.control.handle_event(event):
+            if self.control and self.control.handle_event(event):
                 continue
             if self.logic_analyzer.handle_event(event):
                 continue
@@ -1091,14 +1099,14 @@ class DebugDashboardPro:
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return False
-                elif event.key == pygame.K_SPACE:
+                elif event.key == pygame.K_SPACE and self.control:
                     if self.control.running:
                         self._on_stop()
                         self.control.set_running(False)
                     else:
                         self._on_start()
                         self.control.set_running(True)
-                elif event.key == pygame.K_r and not self.uart_console.input.focused and not self.cdc_console.input.focused:
+                elif event.key == pygame.K_r and self.control and not self.uart_console.input.focused and not self.cdc_console.input.focused:
                     self._on_reset()
                 elif event.key == pygame.K_e and not self.uart_console.input.focused and not self.cdc_console.input.focused:
                     self.export_capture("/tmp/slab_capture")
@@ -1121,7 +1129,8 @@ class DebugDashboardPro:
 
         self.screen.fill(Theme.BG_PRIMARY)
 
-        self.control.draw(self.screen)
+        if self.control:
+            self.control.draw(self.screen)
         self.led_status.draw(self.screen)
         self.logic_analyzer.draw(self.screen)
         self.uart_console.draw(self.screen)
