@@ -156,6 +156,15 @@ class RCC(Peripheral):
         super().__init__(name, base, size)
         self.regs[self.CR] = self.CR_HSIRDY  # HSI ready by default
     
+    def _read_reg(self, offset: int, size: int) -> int:
+        if offset == self.CFGR:
+            val = self.regs.get(offset, 0)
+            # Mirror SW bits [1:0] into SWS bits [3:2]
+            sw = val & 0x3
+            val = (val & ~0xC) | (sw << 2)
+            return val
+        return self.regs.get(offset, 0)
+
     def _write_reg(self, offset: int, size: int, value: int):
         if offset == self.CR:
             # Auto-set ready flags when enable is set
@@ -1051,6 +1060,8 @@ PERIPHERAL_CLASSES = {
     'nordic_gpio': NordicGPIO,
     'nordic_timer': NordicTIMER,
     'nordic_nvmc': NordicNVMC,
+    # USB
+    'usb_otg': None,  # Lazy import, see create_peripheral()
 }
 
 
@@ -1064,8 +1075,13 @@ def create_peripheral(config: dict) -> Peripheral:
     secure_only = config.get('secure_only', False)
     ns_callable = config.get('ns_callable', False)
     
+    if ptype == 'usb_otg':
+        from slab_cortex_m.usb_cdc_peripheral import USBCDCPeripheral
+        periph = USBCDCPeripheral(name, base, size, irq)
+        return periph
+
     cls = PERIPHERAL_CLASSES.get(ptype, Peripheral)
-    
+
     if ptype in ('usart', 'spi', 'timer'):
         periph = cls(name, base, size, irq)
     else:
@@ -1097,6 +1113,7 @@ DEFAULT_CONFIG = {
         {'name': 'SPI1', 'type': 'spi', 'base': 0x40013000, 'size': 0x400, 'irq': 35},
         {'name': 'TIM2', 'type': 'timer', 'base': 0x40000000, 'size': 0x400, 'irq': 28},
         {'name': 'TIM3', 'type': 'timer', 'base': 0x40000400, 'size': 0x400, 'irq': 29},
+        {'name': 'USB_OTG_FS', 'type': 'usb_otg', 'base': 0x50000000, 'size': 0x40000, 'irq': 67},
     ]
 }
 
@@ -1108,12 +1125,14 @@ DEFAULT_CONFIG = {
 class MCUemuServer:
     """TCP server handling QEMU MCUemu peripheral accesses."""
     
-    def __init__(self, port: int, config: dict = None):
+    def __init__(self, port: int, config: dict = None, usbip_port: int = 0):
         self.port = port
+        self.usbip_port = usbip_port
         self.config = config or DEFAULT_CONFIG
         self.peripherals: List[Peripheral] = []
         self.running = False
         self.client: Optional[asyncio.StreamWriter] = None
+        self.usbip_server = None
         self.log = log
     
     def _create_peripherals(self):
@@ -1225,19 +1244,27 @@ class MCUemuServer:
             await writer.wait_closed()
             self.log.info("QEMU disconnected")
     
+    def _find_usb_peripheral(self):
+        """Find the USB OTG peripheral (if registered)."""
+        from slab_cortex_m.usb_cdc_peripheral import USBCDCPeripheral
+        for p in self.peripherals:
+            if isinstance(p, USBCDCPeripheral):
+                return p
+        return None
+
     async def start(self):
         """Start the TCP server."""
         self._create_peripherals()
-        
+
         server = await asyncio.start_server(
             self._handle_client,
             '127.0.0.1',
             self.port,
             reuse_address=True
         )
-        
+
         self.running = True
-        
+
         # Print banner
         print("\n" + "="*70)
         print("  MCUemu Peripheral Server")
@@ -1248,14 +1275,34 @@ class MCUemuServer:
         for p in sorted(self.peripherals, key=lambda x: x.base):
             irq_str = f"IRQ {p.irq}" if p.irq >= 0 else "no IRQ"
             print(f"  {p.name:12} @ 0x{p.base:08X} ({irq_str})")
+
+        # Start USBIP server if enabled
+        tasks = [server.serve_forever()]
+
+        if self.usbip_port > 0:
+            usb_periph = self._find_usb_peripheral()
+            if usb_periph:
+                from slab_cortex_m.usbip_server import USBIPServer
+                self.usbip_server = USBIPServer(port=self.usbip_port)
+                self.usbip_server.set_usb_peripheral(usb_periph)
+                usbip_srv = await asyncio.start_server(
+                    self.usbip_server.handle_client,
+                    '0.0.0.0',
+                    self.usbip_port,
+                    reuse_address=True
+                )
+                tasks.append(usbip_srv.serve_forever())
+                print(f"\n[USBIP] Listening on port {self.usbip_port}")
+                print(f"  usbip_client.py attach --host localhost --port {self.usbip_port} --busid 1-1")
+            else:
+                self.log.warning("USBIP port specified but no USB peripheral found")
+
         print("\n[QEMU Command]")
-        print(f"  qemu-system-arm -M slab-cortex-m \\")
-        print(f"    -global slab-cortex-m.tcp-port={self.port} \\")
+        print(f"  qemu-system-arm -M slab-cortex-m,tcp-port={self.port} \\")
         print(f"    -kernel firmware.bin")
         print()
-        
-        async with server:
-            await server.serve_forever()
+
+        await asyncio.gather(*tasks)
     
     async def stop(self):
         self.running = False
@@ -1281,8 +1328,9 @@ def load_config(path: str) -> dict:
 
 async def main_async(args):
     config = load_config(args.config)
-    server = MCUemuServer(args.port, config)
-    
+    usbip_port = getattr(args, 'usbip_port', 0)
+    server = MCUemuServer(args.port, config, usbip_port=usbip_port)
+
     try:
         await server.start()
     except asyncio.CancelledError:
@@ -1293,6 +1341,8 @@ def main():
     parser = argparse.ArgumentParser(description='MCUemu Peripheral Server')
     parser.add_argument('--port', '-p', type=int, default=5000,
                        help='TCP port (default: 5000)')
+    parser.add_argument('--usbip-port', type=int, default=0,
+                       help='USBIP server port (0 = disabled, default: 0)')
     parser.add_argument('--config', '-c', type=str,
                        help='Peripheral config file (YAML/JSON)')
     parser.add_argument('--verbose', '-v', action='store_true',

@@ -248,6 +248,7 @@ class USBCDCPeripheral:
     GRXSTSP = 0x020   # Receive status pop
     GRXFSIZ = 0x024   # Receive FIFO size
     DIEPTXF0 = 0x028  # EP0 TX FIFO size
+    GCCFG = 0x038     # General core configuration
     DCFG = 0x800      # Device configuration
     DCTL = 0x804      # Device control
     DSTS = 0x808      # Device status
@@ -255,6 +256,7 @@ class USBCDCPeripheral:
     DOEPMSK = 0x814   # Device OUT EP mask
     DAINT = 0x818     # All EP interrupt
     DAINTMSK = 0x81C  # All EP interrupt mask
+    DIEPEMPMSK = 0x834  # IN EP FIFO empty interrupt mask
     # IN endpoint registers start at 0x900
     DIEPCTL0 = 0x900  # IN EP0 control
     DIEPINT0 = 0x908  # IN EP0 interrupt
@@ -276,6 +278,8 @@ class USBCDCPeripheral:
         self.base = base
         self.size = size
         self.irq = irq
+        self.secure_only = False
+        self.ns_callable = False
         self.log = logging.getLogger(f'USB.{name}')
         self.irq_callback: Optional[Callable[[int, int], None]] = None
 
@@ -307,6 +311,14 @@ class USBCDCPeripheral:
         # Used to detect when IN transfer is complete and set XFRC.
         self._tx_pending: Dict[int, int] = {}
 
+        # EP0 async completion: USBIP server awaits firmware EP0 IN response
+        self._ep0_event: Optional[asyncio.Event] = None
+        self._ep0_response: bytes = b''
+        self._ep0_xfer_len: int = 0
+        self._ep0_accum: bytearray = bytearray()  # Accumulate multi-packet data
+        self._ep0_expected: int = 0  # Expected total from SETUP wLength
+        self._ep0_max_pkt: int = 64  # EP0 max packet size
+
         # RX FIFO consumption tracking: bytes consumed since last status pop.
         # Used to auto-pop status entries for firmware that doesn't read GRXSTSP.
         self._rx_fifo_consumed: int = 0
@@ -317,7 +329,7 @@ class USBCDCPeripheral:
 
         # Registers
         self.regs: Dict[int, int] = {
-            self.GOTGCTL: 0x00010000,  # Current mode = device
+            self.GOTGCTL: 0x00010000,  # Current mode = device (VBUS not valid until host connects)
             self.GOTGINT: 0x00000000,
             self.GAHBCFG: 0x00000000,
             self.GUSBCFG: 0x00001440,  # Full-speed
@@ -328,6 +340,7 @@ class USBCDCPeripheral:
             self.GRXSTSP: 0x00000000,
             self.GRXFSIZ: 0x00000200,  # 512 bytes
             self.DIEPTXF0: 0x02000200,
+            self.GCCFG: 0x00000000,
             self.DCFG: 0x00000000,
             self.DCTL: 0x00000000,
             self.DSTS: 0x00000010,     # Suspend status
@@ -335,6 +348,7 @@ class USBCDCPeripheral:
             self.DOEPMSK: 0x00000000,
             self.DAINT: 0x00000000,
             self.DAINTMSK: 0x00000000,
+            self.DIEPEMPMSK: 0x00000000,
         }
 
         # Endpoint registers
@@ -363,7 +377,8 @@ class USBCDCPeripheral:
         """Compute effective GINTSTS including dynamic bits.
 
         Per DWC2 spec, interrupt propagation chain:
-        - DAINT[n] = (DIEPINTn & DIEPMSK) != 0
+        - DAINT[n] = (DIEPINTn & effective_mask) != 0
+          where effective_mask = DIEPMSK | (((DIEPEMPMSK >> n) & 1) << 7)
         - DAINT[16+n] = (DOEPINTn & DOEPMSK) != 0
         - GINTSTS.IEPINT = (DAINT[15:0] & DAINTMSK[15:0]) != 0
         - GINTSTS.OEPINT = (DAINT[31:16] & DAINTMSK[31:16]) != 0
@@ -378,10 +393,13 @@ class USBCDCPeripheral:
         daintmsk = self.regs.get(self.DAINTMSK, 0)
         diepmsk = self.regs.get(self.DIEPMSK, 0)
         doepmsk = self.regs.get(self.DOEPMSK, 0)
+        diepempmsk = self.regs.get(self.DIEPEMPMSK, 0)
         iep_pending = False
         oep_pending = False
         for ep in range(4):
-            if (self.regs.get(self.DIEPINT0 + ep * 0x20, 0) & diepmsk) and (daintmsk & (1 << ep)):
+            # TXFE (bit 7) is masked by DIEPEMPMSK, not DIEPMSK
+            ep_mask = diepmsk | (((diepempmsk >> ep) & 1) << 7)
+            if (self.regs.get(self.DIEPINT0 + ep * 0x20, 0) & ep_mask) and (daintmsk & (1 << ep)):
                 iep_pending = True
             if (self.regs.get(self.DOEPINT0 + ep * 0x20, 0) & doepmsk) and (daintmsk & (1 << (16 + ep))):
                 oep_pending = True
@@ -408,10 +426,13 @@ class USBCDCPeripheral:
             return
         gintsts = self._compute_gintsts()
         gintmsk = self.regs.get(self.GINTMSK, 0)
-        level = 1 if (gintsts & gintmsk) else 0
+        pending = gintsts & gintmsk
+        level = 1 if pending else 0
+        if level:
+            self.log.debug(f"IRQ assert: GINTSTS=0x{gintsts:08X} & GINTMSK=0x{gintmsk:08X} = 0x{pending:08X}")
         self.irq_callback(self.irq, level)
 
-    def read(self, addr: int, size: int, secure: bool = False) -> int:
+    def read(self, addr: int, size: int, secure: bool = False) -> tuple:
         offset = addr - self.base
 
         # FIFO reads: pop data from shared RX data queue (DWC2 model)
@@ -438,26 +459,30 @@ class USBCDCPeripheral:
                         self.log.debug(f"Auto-popped status (bcnt={bcnt} consumed)")
                         self.trigger_irq()  # RXFLVL may clear
                 self.log.debug(f"FIFO read: 0x{word:08X} (data_remaining={len(self._rx_data_queue)})")
-                return word
-            return 0
+                return (word, 0)
+            return (0, 0)
 
         # DAINT - dynamically reflects which endpoints have pending interrupts
-        # Per DWC2 spec: DAINT[n] = (DIEPINTn & DIEPMSK) != 0
+        # Per DWC2 spec: DAINT[n] = (DIEPINTn & effective_mask) != 0
+        #   where effective_mask = DIEPMSK | (((DIEPEMPMSK >> n) & 1) << 7)
         #                 DAINT[16+n] = (DOEPINTn & DOEPMSK) != 0
         if offset == self.DAINT:
             daint = 0
             diepmsk = self.regs.get(self.DIEPMSK, 0)
             doepmsk = self.regs.get(self.DOEPMSK, 0)
+            diepempmsk = self.regs.get(self.DIEPEMPMSK, 0)
             for ep in range(4):
-                if self.regs.get(self.DIEPINT0 + ep * 0x20, 0) & diepmsk:
+                # TXFE (bit 7) masked by DIEPEMPMSK, not DIEPMSK
+                ep_mask = diepmsk | (((diepempmsk >> ep) & 1) << 7)
+                if self.regs.get(self.DIEPINT0 + ep * 0x20, 0) & ep_mask:
                     daint |= (1 << ep)         # IN EP
                 if self.regs.get(self.DOEPINT0 + ep * 0x20, 0) & doepmsk:
                     daint |= (1 << (16 + ep))  # OUT EP
-            return daint
+            return (daint, 0)
 
         # GINTSTS - dynamically reflects RXFLVL, IEPINT, OEPINT
         if offset == self.GINTSTS:
-            return self._compute_gintsts()
+            return (self._compute_gintsts(), 0)
 
         # GRXSTSR (peek) / GRXSTSP (pop) - return status from mini-FIFO
         # Per RM0090 §34.17.6: GRXSTSR peeks without consuming; GRXSTSP pops.
@@ -480,14 +505,14 @@ class USBCDCPeripheral:
                         self.regs[self.DOEPINT0] |= 0x08
                         self.log.debug("SETUP_COMP popped: DOEPINT0.STUP set")
                     self.trigger_irq()  # Re-evaluate: RXFLVL may clear
-                return result
-            return 0
+                return (result, 0)
+            return (0, 0)
 
         value = self.regs.get(offset, 0)
         self.log.debug(f"Read[{'S' if secure else 'NS'}] 0x{addr:08X} = 0x{value:08X}")
-        return value
+        return (value, 0)
 
-    def write(self, addr: int, size: int, value: int, secure: bool = False) -> bool:
+    def write(self, addr: int, size: int, value: int, secure: bool = False) -> int:
         offset = addr - self.base
         self.log.debug(f"Write[{'S' if secure else 'NS'}] 0x{addr:08X} <- 0x{value:08X}")
 
@@ -495,29 +520,34 @@ class USBCDCPeripheral:
         if 0x1000 <= offset < 0x20000:
             ep = (offset - 0x1000) // 0x1000
             self.handle_tx_data(ep, value)
-            # Track IN transfer progress (works with or without bridge)
-            if ep > 0 and ep in self._tx_pending:
+            # Track IN transfer progress for all endpoints including EP0
+            if ep in self._tx_pending:
                 self._tx_pending[ep] -= 4  # 32-bit FIFO write = 4 bytes
+                self.log.debug(f"EP{ep} FIFO write: 0x{value:08X} (pending={self._tx_pending[ep]})")
                 if self._tx_pending[ep] <= 0:
                     del self._tx_pending[ep]
                     # Transfer complete: set XFRC in DIEPINT(ep)
                     self.regs[self.DIEPINT0 + ep * 0x20] |= 0x01
-                    self.log.debug(f"EP{ep} IN XFRC (transfer complete)")
+                    self.log.info(f"EP{ep} IN XFRC (transfer complete)")
                     self.trigger_irq()
-            return True
+                    if ep == 0:
+                        self._complete_ep0_transfer()
+            return 0
 
         # Handle special registers
 
         # DIEPINT / DOEPINT are W1C (write-1-to-clear)
         for ep in range(4):
             if offset == self.DIEPINT0 + ep * 0x20:
-                self.regs[offset] = self.regs.get(offset, 0) & ~value
+                # TXFE (bit 7) is read-only status, not W1C - preserve it
+                clear_mask = value & ~(1 << 7)
+                self.regs[offset] = self.regs.get(offset, 0) & ~clear_mask
                 self.trigger_irq()  # Re-evaluate: may de-assert IRQ
-                return True
+                return 0
             if offset == self.DOEPINT0 + ep * 0x20:
                 self.regs[offset] = self.regs.get(offset, 0) & ~value
                 self.trigger_irq()  # Re-evaluate: may de-assert IRQ
-                return True
+                return 0
 
         # GINTSTS is W1C (write-1-to-clear) for status bits
         if offset == self.GINTSTS:
@@ -526,7 +556,7 @@ class USBCDCPeripheral:
             self.regs[self.GINTSTS] = current & ~value
             self.log.debug(f"GINTSTS W1C: 0x{current:08X} & ~0x{value:08X} = 0x{self.regs[self.GINTSTS]:08X}")
             self.trigger_irq()  # Re-evaluate: may de-assert IRQ
-            return True
+            return 0
 
         if offset == self.GRSTCTL:
             if value & 0x01:  # Core soft reset
@@ -544,13 +574,13 @@ class USBCDCPeripheral:
                 self.log.info(f"TX FIFO flush (fifo_num={(value >> 6) & 0x1F})")
                 self.tx_buffer.clear()
                 self.regs[self.GRSTCTL] = (self.regs.get(self.GRSTCTL, 0) & ~0x20) | 0x80000000
-            return True
+            return 0
 
         if offset == self.DCFG:
             self.regs[offset] = value
             speed = (value >> 0) & 0x03
             self.log.info(f"Device config: speed={speed}")
-            return True
+            return 0
 
         if offset == self.DCTL:
             self.regs[offset] = value
@@ -563,7 +593,7 @@ class USBCDCPeripheral:
                 # Don't fire USBRST/ENUMDNE here - on real hardware these
                 # only happen when the HOST sends a reset (after detecting
                 # the device pull-up). inject_enumeration() fires them.
-            return True
+            return 0
 
         # EP0 OUT control - re-arm endpoint for next transfer
         if offset == self.DOEPCTL0:
@@ -573,7 +603,7 @@ class USBCDCPeripheral:
                 # Do NOT auto-set DOEPINT0.STUP here!
                 # STUP is only set when a real SETUP packet is received
                 # (via inject_setup_packet or DWC2 core in real hardware).
-            return True
+            return 0
 
         # EP1-3 OUT control: re-arm OUT endpoints
         for ep in range(1, 4):
@@ -581,14 +611,24 @@ class USBCDCPeripheral:
                 self.regs[offset] = value
                 if value & (1 << 31):  # EPENA
                     self.log.debug(f"EP{ep} OUT re-armed (EPENA)")
-                return True
+                return 0
 
-        # EP0 IN control - handle data transmission
+        # EP0 IN control - track transfer via DIEPTSIZ0
         if offset == self.DIEPCTL0:
             self.regs[offset] = value
-            if value & (1 << 31):  # Enable endpoint
-                self.handle_ep0_in()
-            return True
+            if value & (1 << 31):  # EPENA
+                dieptsiz = self.regs.get(self.DIEPTSIZ0, 0)
+                xfer_len = dieptsiz & 0x7F  # EP0 max 127 bytes (RM0090)
+                self._tx_pending[0] = xfer_len
+                self._ep0_xfer_len = xfer_len
+                self.tx_buffer.clear()
+                self.log.info(f"EP0 IN transfer started: {xfer_len} bytes")
+                if xfer_len == 0:
+                    # Zero-length IN (status stage): complete immediately
+                    self.regs[self.DIEPINT0] |= 0x01  # XFRC
+                    self.trigger_irq()
+                    self._complete_ep0_transfer()
+            return 0
 
         # EP1-3 IN control: track EPENA to start transfer
         for ep in range(1, 4):
@@ -604,7 +644,27 @@ class USBCDCPeripheral:
                         # Zero-length packet: immediately complete
                         self.regs[self.DIEPINT0 + ep * 0x20] |= 0x01  # XFRC
                         self.trigger_irq()
-                return True
+                return 0
+
+        # DIEPEMPMSK: TX FIFO empty interrupt enable per EP
+        # When set, DIEPINT.TXFE (bit 7) fires if the TX FIFO is empty.
+        # Our emulated FIFOs are always empty, so set TXFE immediately.
+        # When cleared, clear TXFE in DIEPINT to stop the interrupt.
+        if offset == self.DIEPEMPMSK:
+            old_val = self.regs.get(offset, 0)
+            self.regs[offset] = value
+            self.log.info(f"DIEPEMPMSK: 0x{value:08X}")
+            for ep in range(4):
+                if value & (1 << ep):
+                    # FIFO is empty -> set TXFE in DIEPINT
+                    self.regs[self.DIEPINT0 + ep * 0x20] |= (1 << 7)  # TXFE
+                    self.log.info(f"EP{ep} TXFE set (FIFO empty)")
+                elif old_val & (1 << ep):
+                    # EP was enabled, now disabled -> clear TXFE
+                    self.regs[self.DIEPINT0 + ep * 0x20] &= ~(1 << 7)
+                    self.log.debug(f"EP{ep} TXFE cleared (DIEPEMPMSK disabled)")
+            self.trigger_irq()
+            return 0
 
         # DAINTMSK: log when firmware enables endpoint interrupts
         if offset == self.DAINTMSK:
@@ -615,19 +675,28 @@ class USBCDCPeripheral:
                 out_eps = [ep for ep in range(4) if value & (1 << (16 + ep))]
                 self.log.info(f"DAINTMSK: 0x{value:08X} (IN={in_eps} OUT={out_eps})")
             self.trigger_irq()
-            return True
+            return 0
+
+        # GCCFG: General core config (VBUS sensing, power down)
+        if offset == self.GCCFG:
+            self.regs[offset] = value
+            self.log.info(f"GCCFG: 0x{value:08X} (PWRDWN={bool(value&(1<<16))}, "
+                         f"VBDEN={bool(value&(1<<21))})")
+            return 0
 
         # GINTMSK / GAHBCFG writes: re-evaluate IRQ level
         if offset in (self.GINTMSK, self.GAHBCFG):
             self.regs[offset] = value
             if offset == self.GINTMSK:
                 self.log.info(f"GINTMSK: 0x{value:08X} (RXFLVL={bool(value&(1<<4))})")
+            if offset == self.GAHBCFG:
+                self.log.info(f"GAHBCFG: 0x{value:08X} (GINTMSK={bool(value&1)})")
             self.trigger_irq()
-            return True
+            return 0
 
         # Generic register write
         self.regs[offset] = value
-        return True
+        return 0
 
     def inject_setup_packet(self, setup_data: bytes):
         """Inject a USB SETUP packet into EP0 RX path (DWC2 model).
@@ -661,12 +730,42 @@ class USBCDCPeripheral:
         # §8.2.4.2.4: "After SETUP data is extracted, core asserts STUP."
         self._rx_status_queue.append((0, 0x4, 0))  # pktsts=SETUP_COMP
 
-        # Store SETUP packet for reference
+        # Store SETUP packet for reference and parse wLength for multi-packet tracking
         self.setup_packet = setup_data
+        wLength = setup_data[6] | (setup_data[7] << 8)
+        self._ep0_expected = wLength
 
         self.log.info(f"Injected SETUP: {setup_data.hex()} "
                      f"(bmReqType=0x{setup_data[0]:02X} bReq=0x{setup_data[1]:02X} "
-                     f"wVal=0x{setup_data[2]|setup_data[3]<<8:04X})")
+                     f"wVal=0x{setup_data[2]|setup_data[3]<<8:04X} wLen={wLength})")
+        self.trigger_irq()
+
+    def inject_vbus(self, connected: bool = True):
+        """Inject VBUS state change.
+
+        On real hardware, VBUS is asserted by the host when a cable is plugged in.
+        The DWC2 core detects VBUS via GCCFG.VBDEN and reports status in GOTGCTL.
+
+        When VBUS is asserted:
+        - GOTGCTL.BSVLD (bit 19) = 1 (B-session valid)
+        - GOTGCTL.ASVLD (bit 18) = 1 (A-session valid)
+        - GINTSTS.SRQINT (bit 30) fires (session request)
+
+        When VBUS is deasserted:
+        - GOTGCTL.BSVLD = 0, ASVLD = 0
+        - GINTSTS.OTGINT (bit 2) fires
+        """
+        gotgctl = self.regs.get(self.GOTGCTL, 0)
+        if connected:
+            gotgctl |= (1 << 19) | (1 << 18)  # BSVLD + ASVLD
+            self.regs[self.GOTGCTL] = gotgctl
+            self.regs[self.GINTSTS] = self.regs.get(self.GINTSTS, 0) | (1 << 30)  # SRQINT
+            self.log.info("VBUS asserted (BSVLD=1, ASVLD=1)")
+        else:
+            gotgctl &= ~((1 << 19) | (1 << 18))
+            self.regs[self.GOTGCTL] = gotgctl
+            self.regs[self.GINTSTS] = self.regs.get(self.GINTSTS, 0) | (1 << 2)  # OTGINT
+            self.log.info("VBUS deasserted (BSVLD=0, ASVLD=0)")
         self.trigger_irq()
 
     def inject_usbrst(self):
@@ -702,6 +801,73 @@ class USBCDCPeripheral:
         self.regs[self.GINTSTS] |= (1 << 13)  # ENUMDNE
         self.trigger_irq()
         self.log.info("Injected ENUMDNE (DSTS.ENUMSPD=3, Full Speed)")
+
+    def _complete_ep0_transfer(self):
+        """Called when EP0 IN packet finishes (XFRC).
+
+        For multi-packet transfers (data > EP0 max packet size), the HAL sends
+        multiple packets. We accumulate data across XFRC events and signal
+        completion when:
+        - A short packet is received (pkt_len < max_pkt_size), OR
+        - Total accumulated data >= expected wLength from SETUP
+        DWC2 FIFO writes are 32-bit aligned, so trim each packet to its xfer_len.
+        """
+        raw = bytes(self.tx_buffer)
+        pkt_data = raw[:self._ep0_xfer_len] if self._ep0_xfer_len > 0 else raw
+        self._ep0_accum.extend(pkt_data)
+        pkt_len = len(pkt_data)
+        total = len(self._ep0_accum)
+
+        self.log.info(f"EP0 IN packet: {pkt_len} bytes (total={total}/{self._ep0_expected}): "
+                     f"{pkt_data.hex()}")
+
+        # Transfer complete if: short packet OR enough data accumulated
+        if pkt_len < self._ep0_max_pkt or total >= self._ep0_expected:
+            self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
+            self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes: "
+                         f"{self._ep0_response.hex()}")
+            if self._ep0_event:
+                self._ep0_event.set()
+        else:
+            self.log.debug(f"EP0 IN multi-packet: waiting for more data "
+                          f"({total}/{self._ep0_expected})")
+
+    async def wait_ep0_response(self, timeout: float = 5.0) -> bytes:
+        """Wait for firmware to complete EP0 IN transfer.
+
+        Called by USBIPServer when a control IN transfer needs firmware data.
+        Creates an asyncio.Event, waits for _complete_ep0_transfer() to set it.
+        Handles multi-packet transfers by accumulating across XFRC events.
+
+        Returns:
+            Firmware's EP0 IN response data (descriptor bytes, etc.)
+        """
+        self._ep0_event = asyncio.Event()
+        self._ep0_response = b''
+        self._ep0_accum = bytearray()
+        try:
+            await asyncio.wait_for(self._ep0_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            self.log.warning("EP0 response timeout (firmware did not respond)")
+            # Return whatever we accumulated so far
+            if self._ep0_accum:
+                self._ep0_response = bytes(self._ep0_accum)
+        finally:
+            self._ep0_event = None
+        return self._ep0_response
+
+    def inject_out_data(self, ep: int, data: bytes):
+        """Inject OUT data into DWC2 RX path for an endpoint.
+
+        Used for control OUT transfers with data phase (e.g., SET_LINE_CODING).
+        Pushes data into the shared RX FIFO with DATA_UPDT + XFER_COMP status.
+        """
+        self._rx_data_queue.extend(data)
+        self._rx_status_queue.append((ep, 0x2, len(data)))  # DATA_UPDT
+        self._rx_status_queue.append((ep, 0x3, 0))  # XFER_COMP
+        self.regs[self.DOEPINT0 + ep * 0x20] |= 0x01  # XFRC
+        self.log.info(f"Injected OUT data EP{ep}: {len(data)} bytes: {data.hex()}")
+        self.trigger_irq()
 
     def enable_setup_delivery(self):
         """Enable interrupt chain for proper SETUP packet delivery.
@@ -932,7 +1098,7 @@ def test_usb_cdc():
 
     # Read device status
     print("\n2. Check status...")
-    status = usb.read(0x50000808, 4)
+    status, _ = usb.read(0x50000808, 4)
     print(f"   DSTS = 0x{status:08X}")
 
     # Simulate GET_DESCRIPTOR (device)
@@ -959,12 +1125,12 @@ def test_usb_cdc():
 
     # Read back via DWC2 model: check GINTSTS, GRXSTSP (pop), then FIFO
     echo_result = bytearray()
-    while usb.read(0x50000014, 4) & (1 << 4):  # GINTSTS RXFLVL
-        grxstsp = usb.read(0x50000020, 4)  # GRXSTSP: pop status entry
+    while usb.read(0x50000014, 4)[0] & (1 << 4):  # GINTSTS RXFLVL
+        grxstsp, _ = usb.read(0x50000020, 4)  # GRXSTSP: pop status entry
         bcnt = (grxstsp >> 4) & 0x7FF
         words = (bcnt + 3) // 4
         for _ in range(words):
-            w = usb.read(0x50001000, 4)
+            w, _ = usb.read(0x50001000, 4)
             for j in range(4):
                 b = (w >> (j * 8)) & 0xFF
                 if b:

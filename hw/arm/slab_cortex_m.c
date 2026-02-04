@@ -47,6 +47,7 @@
 #include "qapi/error.h"
 #include "qemu/error-report.h"
 #include "hw/arm/armv7m.h"
+#include "target/arm/cpu.h"
 #include "hw/arm/boot.h"
 #include "hw/arm/machines-qom.h"
 #include "hw/core/boards.h"
@@ -258,7 +259,7 @@ static void slab_proxy_sync_mpu_state(SlabPeriphProxyState *s)
     mpu_area = (volatile uint32_t *)((uint8_t *)s->shm_ptr + SHM_MPU_OFFSET);
 
     /* Write MPU_CTRL */
-    mpu_area[0] = env->pmsav7.ctrl[0];  /* M_REG_S bank */
+    mpu_area[0] = env->v7m.mpu_ctrl[0];  /* M_REG_NS bank */
 
     /* Write per-region RBAR + RASR */
     for (i = 0; i < SHM_MPU_MAX_REGIONS && i < cpu->pmsav7_dregion; i++) {
@@ -398,7 +399,7 @@ static void slab_proxy_restore_snapshot(SlabPeriphProxyState *s)
     env->v7m.basepri[0] = snap[2 + SNAP_REG_BASEPRI];
 
     /* Flush TB cache after register modification */
-    tb_flush(CPU(cpu));
+    queue_tb_flush(CPU(cpu));
 }
 
 /*
@@ -563,13 +564,48 @@ static uint64_t slab_proxy_tcp_transaction(SlabPeriphProxyState *s, bool is_writ
         return 0;
     }
 
-    /* Receive response (blocking) */
-    n = recv(s->client_fd, resp, 5, MSG_WAITALL);
-    if (n != 5) {
-        close(s->client_fd);
-        s->client_fd = -1;
-        s->tcp_connected = false;
-        return 0;
+    /* Receive response (blocking).
+     * The Python server may send IRQ packets (6 bytes, starting with 'I')
+     * interleaved with the transaction response (5 bytes). This can happen
+     * when trigger_irq() is called during a register read/write handler.
+     * Handle IRQ packets inline until we get the actual response. */
+    while (1) {
+        n = recv(s->client_fd, resp, 1, MSG_WAITALL);
+        if (n != 1) {
+            close(s->client_fd);
+            s->client_fd = -1;
+            s->tcp_connected = false;
+            return 0;
+        }
+
+        if (resp[0] == 'I') {
+            /* Inline IRQ packet: read remaining 5 bytes */
+            uint8_t irq_buf[5];
+            n = recv(s->client_fd, irq_buf, 5, MSG_WAITALL);
+            if (n != 5) {
+                close(s->client_fd);
+                s->client_fd = -1;
+                s->tcp_connected = false;
+                return 0;
+            }
+            uint32_t irq_num = irq_buf[0] | (irq_buf[1] << 8) |
+                               (irq_buf[2] << 16) | (irq_buf[3] << 24);
+            int level = irq_buf[4];
+            if (irq_num < s->num_irqs) {
+                qemu_set_irq(s->irqs[irq_num], level);
+            }
+            continue;  /* Read next byte - might be another IRQ or the response */
+        }
+
+        /* First byte of transaction response, read remaining 4 bytes */
+        n = recv(s->client_fd, resp + 1, 4, MSG_WAITALL);
+        if (n != 4) {
+            close(s->client_fd);
+            s->client_fd = -1;
+            s->tcp_connected = false;
+            return 0;
+        }
+        break;
     }
 
     value = resp[0] | (resp[1] << 8) | (resp[2] << 16) | (resp[3] << 24);
@@ -732,6 +768,17 @@ static void slab_proxy_check_incoming(SlabPeriphProxyState *s)
 }
 
 /*
+ * FD handler callback: called by QEMU main loop when data arrives on TCP socket.
+ * This allows IRQ injection from the Python server to work even when the
+ * firmware is not accessing peripheral registers (e.g., in its main loop).
+ */
+static void slab_proxy_fd_read(void *opaque)
+{
+    SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
+    slab_proxy_check_incoming(s);
+}
+
+/*
  * Try to establish TCP connection
  */
 static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s)
@@ -764,6 +811,10 @@ static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s)
 
     s->client_fd = fd;
     s->tcp_connected = true;
+
+    /* Register FD handler so QEMU main loop calls us when data arrives.
+     * This is critical for IRQ delivery when firmware is idle. */
+    qemu_set_fd_handler(fd, slab_proxy_fd_read, NULL, s);
 
     info_report("Slab Proxy [%s]: Connected to TCP 127.0.0.1:%d",
                 s->name, s->tcp_port);
@@ -895,6 +946,9 @@ struct SlabCortexMState {
 
     /* Debug configuration */
     bool debug_proxy;
+
+    /* USBIP configuration */
+    int32_t usbip_port;
 };
 
 
@@ -1033,7 +1087,7 @@ static void slab_cortex_m_init(MachineState *machine)
     /* ========== DEBUG PROXY ========== */
     if (s->debug_proxy) {
         DeviceState *dbg_proxy_dev = qdev_new(TYPE_SLAB_PERIPH_PROXY);
-        object_property_add_child(OBJECT(machine), "debug-proxy", OBJECT(dbg_proxy_dev));
+        object_property_add_child(OBJECT(machine), "debug-proxy-dev", OBJECT(dbg_proxy_dev));
         qdev_prop_set_uint32(dbg_proxy_dev, "base", ARM_PPB_BASE);
         qdev_prop_set_uint32(dbg_proxy_dev, "size", ARM_PPB_SIZE);
         qdev_prop_set_int32(dbg_proxy_dev, "tcp-port", s->tcp_port);
@@ -1061,6 +1115,22 @@ static void slab_cortex_m_init(MachineState *machine)
     for (uint32_t i = 0; i < s->num_irqs; i++) {
         sysbus_connect_irq(SYS_BUS_DEVICE(proxy_dev), i,
                           qdev_get_gpio_in(armv7m_dev, i));
+    }
+
+    /* ========== USBIP DWC2 DEVICE CONTROLLER ========== */
+    if (s->usbip_port > 0) {
+        DeviceState *usbip_dev = qdev_new("slab-usbip");
+        object_property_add_child(OBJECT(machine), "usbip", OBJECT(usbip_dev));
+        qdev_prop_set_int32(usbip_dev, "usbip-port", s->usbip_port);
+        sysbus_realize(SYS_BUS_DEVICE(usbip_dev), &error_fatal);
+        /* Map at 0x50000000 with priority 1 (overrides peripheral proxy) */
+        memory_region_add_subregion_overlap(get_system_memory(), 0x50000000,
+            sysbus_mmio_get_region(SYS_BUS_DEVICE(usbip_dev), 0), 1);
+        /* Connect OTG_FS IRQ (IRQn 67) */
+        sysbus_connect_irq(SYS_BUS_DEVICE(usbip_dev), 0,
+                          qdev_get_gpio_in(armv7m_dev, 67));
+        info_report("  USBIP:       port %d (DWC2 @ 0x50000000, IRQ 67)",
+                    s->usbip_port);
     }
 
     /* ========== CPU1 INITIALIZATION (DUAL-CORE) ========== */
@@ -1200,6 +1270,40 @@ static void slab_cortex_m_set_debug_proxy(Object *obj, bool value, Error **errp)
     s->debug_proxy = value;
 }
 
+static char *slab_cortex_m_get_tcp_port(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("%d", s->tcp_port);
+}
+
+static void slab_cortex_m_set_tcp_port(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    int port = atoi(value);
+    if (port <= 0 || port > 65535) {
+        error_setg(errp, "tcp-port must be between 1 and 65535");
+        return;
+    }
+    s->tcp_port = port;
+}
+
+static char *slab_cortex_m_get_usbip_port(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("%d", s->usbip_port);
+}
+
+static void slab_cortex_m_set_usbip_port(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    int port = atoi(value);
+    if (port < 0 || port > 65535) {
+        error_setg(errp, "usbip-port must be between 0 and 65535 (0 = disabled)");
+        return;
+    }
+    s->usbip_port = port;
+}
+
 static void slab_cortex_m_instance_init(Object *obj)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
@@ -1233,7 +1337,7 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
 
     /*
      * Add machine properties using object_class_property_add_*
-     * These can be set via: -global slab-cortex-m.<property>=<value>
+     * These can be set via: -M slab-cortex-m,<property>=<value>
      */
 
     /* CPU configuration */
@@ -1272,12 +1376,26 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(oc, "dual-core",
         "Enable second CPU core for asymmetric multiprocessing");
 
+    /* TCP port for peripheral proxy */
+    object_class_property_add_str(oc, "tcp-port",
+                                  slab_cortex_m_get_tcp_port,
+                                  slab_cortex_m_set_tcp_port);
+    object_class_property_set_description(oc, "tcp-port",
+        "TCP port for peripheral proxy server (default: 5555)");
+
     /* Debug proxy */
     object_class_property_add_bool(oc, "debug-proxy",
                                    slab_cortex_m_get_debug_proxy,
                                    slab_cortex_m_set_debug_proxy);
     object_class_property_set_description(oc, "debug-proxy",
         "Forward debug region (0xE0000000) accesses to peripheral proxy");
+
+    /* USBIP port */
+    object_class_property_add_str(oc, "usbip-port",
+                                  slab_cortex_m_get_usbip_port,
+                                  slab_cortex_m_set_usbip_port);
+    object_class_property_set_description(oc, "usbip-port",
+        "USBIP server port for DWC2 USB device controller (0 = disabled, default: 0)");
 }
 
 static const TypeInfo slab_cortex_m_info = {

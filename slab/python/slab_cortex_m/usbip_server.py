@@ -345,7 +345,13 @@ class USBIPServer:
         self.device = CDCACMDevice()
         self.device_info = USBDevice()
         self.imported = False
+        self.usb_peripheral = None
         self.log = logging.getLogger('USBIP')
+
+    def set_usb_peripheral(self, peripheral):
+        """Link to DWC2 peripheral for register-level injection."""
+        self.usb_peripheral = peripheral
+        self.log.info("Linked to USB peripheral for DWC2 injection")
 
     async def handle_client(self, reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter):
@@ -357,10 +363,10 @@ class USBIPServer:
         try:
             while True:
                 if not imported:
-                    # Discovery mode: version(2) + padding(4) + command(2) = 8 bytes
+                    # Discovery mode: version(2) + command(2) + status(4) = 8 bytes
                     header = await reader.readexactly(8)
 
-                    version, command = struct.unpack('>HxxxxH', header)
+                    version, command, status = struct.unpack('>HHI', header)
                     self.log.debug(f"Command: 0x{command:04X} version=0x{version:04X}")
 
                     if command == USBIPCommand.OP_REQ_DEVLIST:
@@ -390,11 +396,16 @@ class USBIPServer:
                         self.log.warning(f"Unknown URB command: 0x{command:08X}")
                         break
 
+        except (asyncio.IncompleteReadError, ConnectionResetError, BrokenPipeError):
+            pass
         except Exception as e:
             self.log.error(f"Error: {e}")
         finally:
-            writer.close()
-            await writer.wait_closed()
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
             self.log.info("Client disconnected")
 
     async def handle_devlist(self, reader: asyncio.StreamReader,
@@ -452,7 +463,75 @@ class USBIPServer:
 
         writer.write(response)
         await writer.drain()
+
+        # Inject USB connection sequence into DWC2 peripheral
+        # Each step needs enough time for firmware to process via proxy
+        # (each register access = TCP round-trip ~0.1-1ms, ~20 accesses per step)
+        if success and self.usb_peripheral:
+            # 1. Assert VBUS (cable plugged in)
+            self.usb_peripheral.inject_vbus(connected=True)
+            self.log.info("Waiting for firmware to detect VBUS...")
+            await asyncio.sleep(0.3)
+            # 2. Bus reset (host resets device)
+            self.usb_peripheral.inject_usbrst()
+            self.log.info("Waiting for firmware to process USBRST...")
+            await asyncio.sleep(0.3)
+            # 3. Enumeration done (speed negotiation complete)
+            self.usb_peripheral.inject_enumdne()
+            self.log.info("Waiting for firmware to process ENUMDNE...")
+            await asyncio.sleep(0.3)
+
         return success
+
+    def _decode_setup(self, setup: bytes) -> str:
+        """Decode USB SETUP packet into human-readable string."""
+        if len(setup) < 8:
+            return f"<invalid {setup.hex()}>"
+        bmRequestType = setup[0]
+        bRequest = setup[1]
+        wValue = setup[2] | (setup[3] << 8)
+        wIndex = setup[4] | (setup[5] << 8)
+        wLength = setup[6] | (setup[7] << 8)
+
+        # Decode standard requests
+        req_type = (bmRequestType >> 5) & 0x03
+        direction = "IN" if bmRequestType & 0x80 else "OUT"
+
+        if req_type == 0:  # Standard
+            names = {
+                0x00: "GET_STATUS",
+                0x01: "CLEAR_FEATURE",
+                0x03: "SET_FEATURE",
+                0x05: f"SET_ADDRESS({wValue})",
+                0x06: self._decode_get_descriptor(wValue, wLength),
+                0x08: "GET_CONFIGURATION",
+                0x09: f"SET_CONFIGURATION({wValue})",
+                0x0B: f"SET_INTERFACE({wValue})",
+            }
+            name = names.get(bRequest, f"STD_0x{bRequest:02X}")
+        elif req_type == 1:  # Class
+            names = {
+                0x20: "SET_LINE_CODING",
+                0x21: "GET_LINE_CODING",
+                0x22: f"SET_CONTROL_LINE_STATE(0x{wValue:04X})",
+                0x23: "SEND_BREAK",
+            }
+            name = names.get(bRequest, f"CLASS_0x{bRequest:02X}")
+        else:
+            name = f"VENDOR_0x{bRequest:02X}"
+
+        return f"{direction} {name} wIdx=0x{wIndex:04X} wLen={wLength}"
+
+    def _decode_get_descriptor(self, wValue: int, wLength: int) -> str:
+        """Decode GET_DESCRIPTOR wValue."""
+        desc_type = (wValue >> 8) & 0xFF
+        desc_index = wValue & 0xFF
+        type_names = {
+            1: "Device", 2: "Configuration", 3: f"String({desc_index})",
+            6: "DeviceQualifier", 9: "OTG", 10: "Debug",
+        }
+        name = type_names.get(desc_type, f"0x{desc_type:02X}")
+        return f"GET_DESCRIPTOR({name}, len={wLength})"
 
     async def handle_submit(self, reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter, header: bytes):
@@ -461,36 +540,82 @@ class USBIPServer:
         submit_data = header + await reader.readexactly(44)
         submit = USBIPSubmit.unpack(submit_data)
 
-        self.log.debug(f"SUBMIT: seqnum={submit.header.seqnum} ep={submit.header.ep} "
-                      f"dir={submit.header.direction} len={submit.transfer_buffer_length}")
-
         # Read transfer buffer (for OUT transfers)
         transfer_data = bytes()
         if submit.header.direction == 0 and submit.transfer_buffer_length > 0:
             transfer_data = await reader.readexactly(submit.transfer_buffer_length)
 
-        # Handle the request
+        # Decode and log the SETUP packet for EP0
+        setup_desc = ""
+        if submit.header.ep == 0:
+            setup_desc = self._decode_setup(submit.setup)
+            self.log.info(f"CMD_SUBMIT seq={submit.header.seqnum} EP0 {setup_desc}")
+        else:
+            dir_str = "IN" if submit.header.direction else "OUT"
+            self.log.info(f"CMD_SUBMIT seq={submit.header.seqnum} EP{submit.header.ep} "
+                         f"{dir_str} len={submit.transfer_buffer_length}")
+
         response_data = bytes()
         actual_length = 0
         status = 0
+        source = "none"
 
-        if submit.header.ep == 0:
-            # Control transfer
+        if submit.header.ep == 0 and self.usb_peripheral:
+            # Firmware-in-the-loop path
+            if submit.header.direction == 1:  # IN (device to host)
+                # Inject SETUP, wait for firmware to respond via EP0 IN
+                self.usb_peripheral.inject_setup_packet(submit.setup)
+                response_data = await self.usb_peripheral.wait_ep0_response(timeout=5.0)
+                actual_length = len(response_data)
+                # Inject STATUS OUT ZLP to complete the control transfer
+                # (USBIP wraps all 3 phases into one CMD_SUBMIT/RET_SUBMIT)
+                if actual_length > 0:
+                    await asyncio.sleep(0.01)
+                    self.usb_peripheral.inject_out_data(0, b'')
+                source = "firmware"
+            else:  # OUT (host to device)
+                # Inject SETUP into firmware
+                self.usb_peripheral.inject_setup_packet(submit.setup)
+                if len(transfer_data) > 0:
+                    # OUT data phase: inject data after a short delay
+                    # (firmware needs time to arm EP0 OUT)
+                    await asyncio.sleep(0.05)
+                    self.usb_peripheral.inject_out_data(0, transfer_data)
+                # Don't wait for ZLP -- respond immediately
+                actual_length = 0
+                source = "firmware"
+
+        elif submit.header.ep == 0:
+            # No peripheral linked: fallback to CDCACMDevice
             if submit.header.direction == 0:  # OUT
-                response_data = self.device.handle_control(submit.setup, transfer_data)
+                self.device.handle_control(submit.setup, transfer_data)
                 actual_length = 0
             else:  # IN
                 response_data = self.device.handle_control(submit.setup)
                 actual_length = len(response_data)
+            source = "fallback"
 
         else:
-            # Data transfer
+            # Bulk/interrupt endpoints: use CDCACMDevice
             ep = submit.header.ep
             if submit.header.direction == 0:  # OUT
                 actual_length = self.device.handle_data_out(ep, transfer_data)
             else:  # IN
                 response_data = self.device.handle_data_in(ep, submit.transfer_buffer_length)
                 actual_length = len(response_data)
+            source = "fallback"
+
+        # Cap actual_length to transfer_buffer_length (USBIP protocol requirement)
+        actual_length = min(actual_length, submit.transfer_buffer_length)
+
+        # Log response
+        if actual_length > 0:
+            data_hex = response_data[:32].hex()
+            suffix = "..." if len(response_data) > 32 else ""
+            self.log.info(f"RET_SUBMIT seq={submit.header.seqnum} [{source}] "
+                         f"{actual_length} bytes: {data_hex}{suffix}")
+        else:
+            self.log.info(f"RET_SUBMIT seq={submit.header.seqnum} [{source}] status={status}")
 
         # Build response
         response = struct.pack('>IIIII',
@@ -507,7 +632,8 @@ class USBIPServer:
             0,  # number_of_packets
             0   # error_count
         )
-        response += response_data.ljust(submit.transfer_buffer_length, b'\x00')[:submit.transfer_buffer_length] if submit.header.direction else b''
+        # Per USBIP protocol (Linux kernel vhci_rx.c): only send actual_length bytes
+        response += response_data[:actual_length] if submit.header.direction and actual_length > 0 else b''
 
         writer.write(response)
         await writer.drain()
