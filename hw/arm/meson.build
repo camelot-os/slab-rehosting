@@ -21,6 +21,7 @@ arm_common_ss.add(when: 'CONFIG_ZYNQ', if_true: files('xilinx_zynq.c'))
 arm_common_ss.add(when: 'CONFIG_SABRELITE', if_true: files('sabrelite.c'))
 
 arm_common_ss.add(when: 'CONFIG_ARM_V7M', if_true: files('armv7m.c'))
+arm_common_ss.add(when: 'CONFIG_SLAB_CORTEX_M', if_true: files('slab_cortex_m.c'))
 arm_common_ss.add(when: 'CONFIG_EXYNOS4', if_true: files('exynos4210.c'))
 arm_common_ss.add(when: 'CONFIG_DIGIC', if_true: files('digic.c'))
 arm_common_ss.add(when: 'CONFIG_OMAP', if_true: files('omap1.c'))
