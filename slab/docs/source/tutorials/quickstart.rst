@@ -11,7 +11,7 @@ Prerequisites
 
 * Python 3.10 or later
 * ``arm-none-eabi-gcc`` toolchain for firmware compilation
-* QEMU source code (provided as submodule)
+* QEMU source code (included in repository)
 * ``pygame`` for visualization (optional)
 
 .. code-block:: bash
@@ -33,22 +33,22 @@ Installation
 
 .. code-block:: bash
 
-   git clone --recursive https://github.com/twistedwires/mcuemu.git
-   cd mcuemu
+   git clone --recursive https://github.com/GotoHack/slab-rehosting.git
+   cd slab-rehosting
 
 2. Build QEMU with slab-cortex-m
 --------------------------------
 
 .. code-block:: bash
 
-   cd qemu
    mkdir -p build && cd build
    ../configure --target-list=arm-softmmu --enable-debug --disable-docs
    ninja
+   cd ..
 
    # Verify the machine is available
-   ./qemu-system-arm -M help | grep slab
-   # Output: slab-cortex-m   SLAB Cortex-M - Generic MCU with Peripheral Proxy
+   ./build/qemu-system-arm -M help | grep slab
+   # Output: slab-cortex-m   Slab Cortex-M - Generic ARM Cortex-M with peripheral export
 
 3. Verify Python Packages
 -------------------------
@@ -56,7 +56,7 @@ Installation
 .. code-block:: python
 
    import sys
-   sys.path.insert(0, "python")
+   sys.path.insert(0, "slab/python")
 
    from slab_stm32 import STM32F439PeripheralSet
    from slab_nrf import NRF52840PeripheralSet
@@ -69,6 +69,14 @@ Your First Emulation
 
 Let's run a simple "Hello World" firmware that blinks an LED and outputs to UART.
 
+First, build the example firmware:
+
+.. code-block:: bash
+
+   cd slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart
+   make clean && make
+   cd -
+
 Step 1: Start the Peripheral Server
 -----------------------------------
 
@@ -76,14 +84,21 @@ In one terminal, start the Python peripheral server:
 
 .. code-block:: bash
 
-   cd mcuemu
-   PYTHONPATH=python python3 python/slab_cortex_m/mcuemu_server.py --port 5000
+   PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5555
 
 You should see::
 
-   [*] MCUemu peripheral server starting on port 5000
-   [*] Loaded STM32F4 peripheral set (42 peripherals)
-   [*] Waiting for QEMU connection...
+   ======================================================================
+     MCUemu Peripheral Server
+     Configuration: STM32F4xx
+   ======================================================================
+
+   [Listening] tcp://127.0.0.1:5555
+
+   [Peripherals] 12 configured:
+     GPIOA        @ 0x40020000 (no IRQ)
+     ...
+     USART2       @ 0x40004400 (IRQ 38)
 
 Step 2: Run QEMU with Firmware
 ------------------------------
@@ -92,28 +107,21 @@ In another terminal, run QEMU with the test firmware:
 
 .. code-block:: bash
 
-   ./qemu/build/qemu-system-arm \
+   ./build/qemu-system-arm \
        -M slab-cortex-m \
-       -cpu cortex-m4 \
-       -kernel tests/firmware/build/test_basic.bin \
+       -global slab-cortex-m.cpu-type=cortex-m4 \
+       -global slab-cortex-m.tcp-port=5555 \
+       -kernel slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin \
        -nographic
 
-The peripheral server should show MMIO activity::
-
-   [QEMU] Connected
-   [RCC]  0x40023800 READ  CR = 0x00000083
-   [GPIO] 0x40020014 WRITE ODR = 0x00002000  # LED ON
-   [GPIO] 0x40020014 WRITE ODR = 0x00000000  # LED OFF
+The peripheral server terminal should show MMIO activity as the firmware
+initializes clocks, configures GPIO, and starts blinking.
 
 Step 3: View Results
 --------------------
 
-The firmware outputs "helloworld" via UART and blinks an LED 10 times.
-After completion, the peripheral server displays statistics::
-
-   [*] Emulation complete
-   [*] Total MMIO operations: 1,247
-   [*] Elapsed time: 0.8s
+The firmware outputs "helloworld" via USART2 and blinks an LED on PA13 using TIM2.
+The test passes after 10 LED toggles (~5 seconds).
 
 Architecture Overview
 =====================

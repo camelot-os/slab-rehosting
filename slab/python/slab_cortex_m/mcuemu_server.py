@@ -1249,8 +1249,8 @@ class MCUemuServer:
             irq_str = f"IRQ {p.irq}" if p.irq >= 0 else "no IRQ"
             print(f"  {p.name:12} @ 0x{p.base:08X} ({irq_str})")
         print("\n[QEMU Command]")
-        print(f"  qemu-system-arm -M mcuemu \\")
-        print(f"    -global mcuemu.tcp-port={self.port} \\")
+        print(f"  qemu-system-arm -M slab-cortex-m \\")
+        print(f"    -global slab-cortex-m.tcp-port={self.port} \\")
         print(f"    -kernel firmware.bin")
         print()
         
