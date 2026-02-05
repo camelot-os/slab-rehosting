@@ -14,7 +14,7 @@ CP = $(PREFIX)objcopy
 SZ = $(PREFIX)size
 
 # Paths
-EXAMPLES_DIR = ../..
+EXAMPLES_DIR = ../../../../..
 REPOS_DIR = $(EXAMPLES_DIR)/repos
 CUBE_DIR = $(REPOS_DIR)/STM32CubeF4
 HAL_DIR = $(CUBE_DIR)/Drivers/STM32F4xx_HAL_Driver

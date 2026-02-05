@@ -24,7 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "python"))
 
-from usbip_server import USBIPServer, CDCACMDevice, USBDevice
+from slab_cortex_m.usbip_server import USBIPServer, CDCACMDevice, USBDevice
 
 
 # =============================================================================

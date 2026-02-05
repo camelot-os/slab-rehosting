@@ -45,3 +45,6 @@
 [submodule "tests/lcitool/libvirt-ci"]
 	path = tests/lcitool/libvirt-ci
 	url = https://gitlab.com/libvirt/libvirt-ci.git
+[submodule "slab/examples/cortex-m/stm32/f405/demos/hello_blink/STM32CubeF4"]
+	path = slab/examples/cortex-m/stm32/f405/demos/hello_blink/STM32CubeF4
+	url = https://github.com/STMicroelectronics/STM32CubeF4.git

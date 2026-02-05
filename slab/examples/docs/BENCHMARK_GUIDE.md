@@ -172,13 +172,14 @@ High P99 can cause timing-sensitive firmware to miss deadlines.
 
 ```bash
 # 1. Build QEMU with slab-cortex-m machine
-cd qemu && mkdir build && cd build
+mkdir -p build && cd build
 ../configure --target-list=arm-softmmu
-make -j$(nproc)
+ninja
+cd ..
 
 # 2. Build test firmware
-cd examples/cortex-m/stm32/f405/rtos/cubemx_blinky && make
-cd examples/cortex-m/stm32/f405/demos/hello_blink_uart && make
+cd slab/examples/cortex-m/stm32/f405/rtos/cubemx_blinky && make && cd -
+cd slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart && make && cd -
 
 # 3. Install Python dependencies
 pip install pytest
@@ -227,12 +228,12 @@ python3 examples/scripts/benchmark_proxy.py --shm-only
 
 Terminal 1 - Start Python server:
 ```bash
-python3 python/mcuemu_server.py --port 5560
+PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5560
 ```
 
 Terminal 2 - Start QEMU:
 ```bash
-./qemu/build/qemu-system-arm \
+./build/qemu-system-arm \
     -M slab-cortex-m,proxy-mode=tcp,tcp-port=5560 \
     -kernel examples/cortex-m/stm32/f407/rtos/zephyr_blinky/build/zephyr.bin \
     -nographic
@@ -242,12 +243,12 @@ Terminal 2 - Start QEMU:
 
 Terminal 1 - Start Python server:
 ```bash
-python3 python/mcuemu_server.py --shm-name=/slab_peripheral
+PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --shm-name=/slab_peripheral
 ```
 
 Terminal 2 - Start QEMU:
 ```bash
-./qemu/build/qemu-system-arm \
+./build/qemu-system-arm \
     -M slab-cortex-m,proxy-mode=shm,shm-name=/slab_peripheral \
     -kernel examples/cortex-m/stm32/f407/rtos/zephyr_blinky/build/zephyr.bin \
     -nographic
@@ -347,7 +348,7 @@ rm /dev/shm/slab_*
 **Fix:**
 ```bash
 # Ensure server is running first
-python3 python/mcuemu_server.py --port 5560 &
+PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5560 &
 sleep 1
 # Then start QEMU
 ```

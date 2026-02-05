@@ -24,9 +24,7 @@ Output: `build/HelloBlinkUart.bin` (~7 KB)
 # TCP proxy mode (from repo root)
 PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5555 &
 ./build/qemu-system-arm \
-    -M slab-cortex-m \
-    -global slab-cortex-m.cpu-type=cortex-m4 \
-    -global slab-cortex-m.tcp-port=5555 \
+    -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
     -kernel slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin \
     -nographic
 

@@ -14,7 +14,7 @@ CP = $(PREFIX)objcopy
 SZ = $(PREFIX)size
 
 # Paths
-EXAMPLES_DIR = ../..
+EXAMPLES_DIR = ../../../../..
 REPOS_DIR = $(EXAMPLES_DIR)/repos
 FREERTOS_DIR = $(REPOS_DIR)/FreeRTOS-Kernel
 CMSIS_DIR = $(REPOS_DIR)/CMSIS_5/CMSIS/Core/Include

@@ -252,7 +252,7 @@ Start the peripheral server:
 
 .. code-block:: bash
 
-   PYTHONPATH=python python3 -c "
+   PYTHONPATH=slab/python python3 -c "
    from slab_stm32 import STM32F4PeripheralSet
    from slab_cortex_m.mcuemu_server import run_server
    run_server(STM32F4PeripheralSet(), port=5000)
@@ -262,9 +262,8 @@ Start QEMU:
 
 .. code-block:: bash
 
-   ./qemu/build/qemu-system-arm \
-       -M slab-cortex-m \
-       -cpu cortex-m4 \
+   ./build/qemu-system-arm \
+       -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
        -kernel firmware.bin \
        -nographic
 
@@ -290,13 +289,13 @@ Here's a self-contained script that runs the full emulation:
    import subprocess
    import struct
    import sys
-   sys.path.insert(0, "python")
+   sys.path.insert(0, "slab/python")
 
    from slab_stm32 import STM32F4PeripheralSet
 
-   QEMU_BIN = "qemu/build/qemu-system-arm"
+   QEMU_BIN = "build/qemu-system-arm"
    FIRMWARE = "firmware.bin"
-   TCP_PORT = 5000
+   TCP_PORT = 5555
 
    async def handle_qemu(reader, writer, ps):
        """Handle QEMU peripheral proxy."""

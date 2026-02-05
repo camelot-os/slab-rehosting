@@ -108,9 +108,7 @@ In another terminal, run QEMU with the test firmware:
 .. code-block:: bash
 
    ./build/qemu-system-arm \
-       -M slab-cortex-m \
-       -global slab-cortex-m.cpu-type=cortex-m4 \
-       -global slab-cortex-m.tcp-port=5555 \
+       -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
        -kernel slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin \
        -nographic
 

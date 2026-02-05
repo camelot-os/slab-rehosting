@@ -20,7 +20,7 @@ Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
 │           │  Peripheral access: 0x40000000 - 0x5FFFFFFF                │
 │           ▼                                                             │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
-│  │              Peripheral Proxy (TCP:5000 or POSIX SHM)           │   │
+│  │              Peripheral Proxy (TCP:5555 or POSIX SHM)           │   │
 │  └───────────────────────────────┬─────────────────────────────────┘   │
 └──────────────────────────────────┼─────────────────────────────────────┘
                                    │
@@ -51,14 +51,14 @@ Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
 ### 1. Build QEMU
 
 ```bash
-cd qemu
 mkdir -p build && cd build
 ../configure --target-list=arm-softmmu --enable-debug
 ninja
+cd ..
 
 # Verify
-./qemu-system-arm -M help | grep slab
-# slab-cortex-m   SLAB Cortex-M - Generic MCU with Peripheral Proxy
+./build/qemu-system-arm -M help | grep slab
+# slab-cortex-m   Slab Cortex-M - Generic ARM Cortex-M with peripheral export
 ```
 
 ### 2. Run Example Firmware
@@ -66,16 +66,15 @@ ninja
 **Terminal 1: Start Peripheral Server**
 
 ```bash
-PYTHONPATH=python python3 python/slab_cortex_m/mcuemu_server.py --port 5000
+PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5555
 ```
 
 **Terminal 2: Run QEMU**
 
 ```bash
-./qemu/build/qemu-system-arm \
-    -M slab-cortex-m \
-    -cpu cortex-m4 \
-    -kernel examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin \
+./build/qemu-system-arm \
+    -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
+    -kernel slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin \
     -nographic
 ```
 
@@ -134,11 +133,10 @@ examples/cortex-m/stm32/h563/stm32h563_tz_cdc/
 **Run the emulation:**
 
 ```bash
-./qemu/build/qemu-system-arm \
-    -M slab-cortex-m,flash-base=0x0C000000,sram-base=0x30000000,sram-size=0xa0000,trustzone=on \
-    -cpu cortex-m33 \
-    -kernel examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin \
-    -device loader,file=examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000 \
+./build/qemu-system-arm \
+    -M slab-cortex-m,cpu-type=cortex-m33,flash-base=0x0C000000,sram-base=0x30000000,sram-size=0xa0000,trustzone=on \
+    -kernel slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin \
+    -device loader,file=slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000 \
     -nographic
 ```
 
@@ -235,7 +233,7 @@ python3 /tmp/test_dashboard_pro.py
 
 ```bash
 # Run unit tests
-PYTHONPATH=python pytest tests/ -v
+PYTHONPATH=slab/python pytest slab/tests/ -v
 
 # Run specific test suites
 pytest tests/test_svd_parser.py -v        # SVD parsing

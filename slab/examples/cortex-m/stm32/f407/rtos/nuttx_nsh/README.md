@@ -61,13 +61,12 @@ CONFIG_WATCHDOG=n
 ## Running with MCUemu
 
 ```bash
-# Start peripheral server
-python3 ../../python/mcuemu_server.py -c ../../configs/stm32f405.yaml &
+# Start peripheral server (from repo root)
+PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5555 &
 
 # Run QEMU with NuttX
-qemu-system-arm -M mcuemu \
-    -global mcuemu.cpu-type=cortex-m4 \
-    -global mcuemu.tcp-port=5000 \
+./build/qemu-system-arm \
+    -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
     -kernel nuttx.bin \
     -nographic
 

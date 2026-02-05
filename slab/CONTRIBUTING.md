@@ -47,13 +47,13 @@ Please be respectful and constructive in all interactions.
 
 ```bash
 # Run Python tests
-PYTHONPATH=python pytest tests/ -v
+PYTHONPATH=slab/python pytest slab/tests/ -v
 
 # Run specific test suite
 pytest tests/test_svd_parser.py -v
 
 # Check code style
-python -m flake8 python/
+python -m flake8 slab/python/
 ```
 
 ### Adding New Peripherals

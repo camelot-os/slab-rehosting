@@ -54,8 +54,7 @@ Use the ``trustzone=on`` option:
 .. code-block:: bash
 
    qemu-system-arm \
-       -M slab-cortex-m,trustzone=on,flash-base=0x0C000000,sram-base=0x30000000 \
-       -cpu cortex-m33 \
+       -M slab-cortex-m,cpu-type=cortex-m33,trustzone=on,flash-base=0x0C000000,sram-base=0x30000000 \
        -kernel secure_fw.bin \
        -device loader,file=nonsecure_fw.bin,addr=0x08042000 \
        -nographic
@@ -286,14 +285,14 @@ Running the TrustZone Example
 
 .. code-block:: bash
 
-   cd examples/cortex-m/stm32/h563/stm32h563_tz_cdc
+   cd slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc
    make
 
 2. Start the peripheral server:
 
 .. code-block:: bash
 
-   PYTHONPATH=python python3 -c "
+   PYTHONPATH=slab/python python3 -c "
    import asyncio
    from slab_stm32 import STM32H563PeripheralSet
    from slab_cortex_m.mcuemu_server import run_tz_server
@@ -304,9 +303,8 @@ Running the TrustZone Example
 
 .. code-block:: bash
 
-   ./qemu/build/qemu-system-arm \
-       -M slab-cortex-m,flash-base=0x0C000000,sram-base=0x30000000,sram-size=0xa0000,trustzone=on \
-       -cpu cortex-m33 \
+   ./build/qemu-system-arm \
+       -M slab-cortex-m,cpu-type=cortex-m33,flash-base=0x0C000000,sram-base=0x30000000,sram-size=0xa0000,trustzone=on \
        -kernel build/secure_fw.bin \
        -device loader,file=build/nonsecure_fw.bin,addr=0x08042000 \
        -nographic

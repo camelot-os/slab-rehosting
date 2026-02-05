@@ -40,15 +40,11 @@ For Zephyr on STM32F4:
 
 ```bash
 # Start peripheral server
-python3 python/mcuemu_server.py --port 5555 --soc stm32f4 &
+PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py --port 5555 &
 
 # Start QEMU
-./qemu/build/qemu-system-arm \
-    -M slab-cortex-m \
-    -global slab-cortex-m.cpu-type=cortex-m4 \
-    -global slab-cortex-m.flash-size=1048576 \
-    -global slab-cortex-m.sram-size=196608 \
-    -global slab-cortex-m.tcp-port=5555 \
+./build/qemu-system-arm \
+    -M slab-cortex-m,cpu-type=cortex-m4,flash-size=1048576,sram-size=196608,tcp-port=5555 \
     -kernel build/zephyr/zephyr.bin \
     -nographic
 ```
