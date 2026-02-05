@@ -194,6 +194,7 @@ class GPIO(Peripheral):
     def __init__(self, name: str, base: int, size: int = 0x400):
         super().__init__(name, base, size)
         self.external_pins = 0  # Set by external connection
+        self.odr_callback: Optional[Callable[[int], None]] = None
     
     def _read_reg(self, offset: int, size: int) -> int:
         if offset == self.IDR:
@@ -208,6 +209,12 @@ class GPIO(Peripheral):
             odr |= (value & 0xFFFF)          # Set bits
             odr &= ~((value >> 16) & 0xFFFF)  # Reset bits
             self.regs[self.ODR] = odr
+            if self.odr_callback:
+                self.odr_callback(odr)
+        elif offset == self.ODR:
+            self.regs[self.ODR] = value
+            if self.odr_callback:
+                self.odr_callback(value)
         else:
             self.regs[offset] = value
     
