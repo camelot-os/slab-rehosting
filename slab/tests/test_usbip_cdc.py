@@ -228,9 +228,8 @@ class TestUSBIPProtocol:
         """Test OP_REQ_DEVLIST / OP_REP_DEVLIST."""
         sock = _connect(usbip_port)
 
-        # Send request: version(2) + 4 bytes padding + command(2) = 8 bytes
-        # Server reads: '>HxxxxH' format
-        req = struct.pack(">HxxxxH", 0x0111, 0x8005)
+        # Send request: version(2) + command(2) + status(4) = 8 bytes
+        req = struct.pack(">HHI", 0x0111, 0x8005, 0)
         sock.sendall(req)
 
         # Response: version(2) + command(2) + status(4) + num_devices(4)
@@ -264,7 +263,7 @@ class TestUSBIPProtocol:
 
         # Send import request
         busid = b"1-1" + b'\x00' * 29  # 32 bytes
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
 
         # Response: version(2) + command(2) + status(4)
@@ -288,7 +287,7 @@ class TestUSBIPProtocol:
         sock = _connect(usbip_port)
 
         busid = b"2-1" + b'\x00' * 29
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
 
         resp = _recv_exact(sock, 8)
@@ -303,7 +302,7 @@ class TestUSBIPProtocol:
 
         # Import first
         busid = b"1-1" + b'\x00' * 29
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
         _recv_exact(sock, 8 + 312)
 
@@ -344,7 +343,7 @@ class TestUSBIPProtocol:
 
         # Import
         busid = b"1-1" + b'\x00' * 29
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
         _recv_exact(sock, 8 + 312)
 
@@ -369,7 +368,7 @@ class TestUSBIPProtocol:
 
         # Import
         busid = b"1-1" + b'\x00' * 29
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
         _recv_exact(sock, 8 + 312)
 
@@ -397,7 +396,7 @@ class TestUSBIPProtocol:
 
         # Import
         busid = b"1-1" + b'\x00' * 29
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
         _recv_exact(sock, 8 + 312)
 
@@ -426,14 +425,15 @@ class TestUSBIPProtocol:
         submit_in += b'\x00' * 8
 
         sock.sendall(submit_in)
-        resp_in = _recv_exact(sock, 48 + 64)  # header + padded data
-        status_in = struct.unpack(">i", resp_in[20:24])[0]
-        actual_in = struct.unpack(">I", resp_in[24:28])[0]
+        # Server sends 48-byte header + actual_length bytes (not transfer_buffer_length)
+        resp_hdr = _recv_exact(sock, 48)
+        status_in = struct.unpack(">i", resp_hdr[20:24])[0]
+        actual_in = struct.unpack(">I", resp_hdr[24:28])[0]
 
         assert status_in == 0
         assert actual_in == len(test_data)
 
-        echo_data = resp_in[48:48 + actual_in]
+        echo_data = _recv_exact(sock, actual_in)
         assert echo_data == test_data
 
         sock.close()
@@ -444,7 +444,7 @@ class TestUSBIPProtocol:
 
         # Import
         busid = b"1-1" + b'\x00' * 29
-        req = struct.pack(">HxxxxH", 0x0111, 0x8003) + busid
+        req = struct.pack(">HHI", 0x0111, 0x8003, 0) + busid
         sock.sendall(req)
         _recv_exact(sock, 8 + 312)
 
@@ -457,7 +457,7 @@ class TestUSBIPProtocol:
             0, 0         # direction, ep
         )
         unlink += struct.pack(">I", 42)  # seqnum to unlink
-        unlink += b'\x00' * 20  # padding to make 48 total
+        unlink += b'\x00' * 24  # padding to make 48 total
 
         sock.sendall(unlink)
 
