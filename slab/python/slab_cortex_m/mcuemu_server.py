@@ -329,38 +329,70 @@ class Timer(Peripheral):
     SR_UIF = 1 << 0   # Update interrupt flag
     DIER_UIE = 1 << 0  # Update interrupt enable
     
-    def __init__(self, name: str, base: int, size: int = 0x400, irq: int = 28):
+    def __init__(self, name: str, base: int, size: int = 0x400, irq: int = 28,
+                 timer_clk: int = 84_000_000):
         super().__init__(name, base, size, irq)
-        self.regs[self.ARR] = 0xFFFF
+        self.regs[self.CR1] = 0x00000000
+        self.regs[self.DIER] = 0x00000000
+        self.regs[self.SR] = 0x00000000
+        self.regs[self.CNT] = 0x00000000
+        self.regs[self.PSC] = 0x00000000
+        self.regs[self.ARR] = 0x0000FFFF
+        self.timer_clk = timer_clk  # Input clock to timer (APB1 timer clock)
         self._counter_task = None
-    
+
     async def _counter_loop(self):
-        """Background counter increment."""
+        """Background timer: compute overflow period, sleep, fire IRQ."""
         try:
             while True:
-                cr1 = self.regs.get(self.CR1, 0)
-                if not (cr1 & self.CR1_CEN):
-                    await asyncio.sleep(0.01)
-                    continue
-                
-                psc = self.regs.get(self.PSC, 0) + 1
-                arr = self.regs.get(self.ARR, 0xFFFF)
-                
-                await asyncio.sleep(0.001 * psc / 1000)  # Scaled down
-                
-                cnt = self.regs.get(self.CNT, 0) + 1
-                if cnt > arr:
-                    cnt = 0
+                try:
+                    cr1 = self.regs.get(self.CR1, 0)
+                    if not (cr1 & self.CR1_CEN):
+                        await asyncio.sleep(0.01)
+                        continue
+
+                    psc = self.regs.get(self.PSC, 0) + 1
+                    arr = self.regs.get(self.ARR, 0xFFFF) + 1
+
+                    # Compute overflow period: (ARR+1) * (PSC+1) / timer_clk
+                    period = (arr * psc) / self.timer_clk
+                    if period < 0.001:
+                        period = 0.001  # Minimum 1ms to avoid busy loop
+
+                    self.log.debug(f"Timer started: period={period:.3f}s "
+                                  f"(PSC={psc-1}, ARR={arr-1})")
+                    await asyncio.sleep(period)
+                    self.log.info(f"Timer fired: IRQ {self.irq}")
+
+                    # Overflow: set UIF and assert IRQ if enabled
+                    # Keep IRQ high until firmware clears UIF via SR write
+                    self.regs[self.CNT] = 0
                     self.regs[self.SR] |= self.SR_UIF
-                    if self.regs.get(self.DIER, 0) & self.DIER_UIE:
-                        self.trigger_irq()
-                self.regs[self.CNT] = cnt
+                    dier = self.regs.get(self.DIER, 0)
+                    if dier & self.DIER_UIE:
+                        self.trigger_irq(1)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self.log.error(f"Timer error: {type(e).__name__}: {e}", exc_info=True)
+                    await asyncio.sleep(1.0)
         except asyncio.CancelledError:
             pass
     
-    def start_counter(self, loop: asyncio.AbstractEventLoop):
+    def _write_reg(self, offset: int, size: int, value: int):
+        """Handle timer register writes. SR is W0C (write-0-to-clear)."""
+        if offset == self.SR:
+            # STM32 SR bits are rc_w0: write 0 to clear, write 1 has no effect
+            self.regs[self.SR] &= value
+            # Deassert IRQ if UIF is cleared
+            if not (self.regs[self.SR] & self.SR_UIF):
+                self.trigger_irq(0)
+        else:
+            self.regs[offset] = value
+
+    def start_counter(self):
         if self._counter_task is None:
-            self._counter_task = loop.create_task(self._counter_loop())
+            self._counter_task = asyncio.ensure_future(self._counter_loop())
 
 
 class Flash(Peripheral):
@@ -1157,8 +1189,11 @@ class MCUemuServer:
             try:
                 packet = struct.pack('<BIB', CMD_IRQ, irq_num, level)
                 self.client.write(packet)
+                self.log.debug(f"IRQ {irq_num} level={level}")
             except Exception as e:
-                self.log.warning(f"Failed to send IRQ: {e}")
+                self.log.warning(f"Failed to send IRQ {irq_num}: {e}")
+        else:
+            self.log.debug(f"IRQ {irq_num} dropped (no client)")
     
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle connected QEMU client."""
@@ -1256,6 +1291,11 @@ class MCUemuServer:
         """Start the TCP server."""
         self._create_peripherals()
 
+        # Start background tasks for timer peripherals
+        for p in self.peripherals:
+            if isinstance(p, Timer):
+                p.start_counter()
+
         server = await asyncio.start_server(
             self._handle_client,
             '127.0.0.1',
@@ -1303,7 +1343,7 @@ class MCUemuServer:
         print()
 
         await asyncio.gather(*tasks)
-    
+
     async def stop(self):
         self.running = False
 
