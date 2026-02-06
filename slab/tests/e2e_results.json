@@ -1,0 +1,184 @@
+{
+  "total": 22,
+  "passed": 14,
+  "failed": 0,
+  "skipped": 0,
+  "results": [
+    {
+      "name": "STM32F405 HelloBlink [legacy]",
+      "passed": true,
+      "mmio_count": 222,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 HelloBlink [board]",
+      "passed": true,
+      "mmio_count": 63696,
+      "duration": 6.05,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 HelloBlinkUart [legacy]",
+      "passed": true,
+      "mmio_count": 95252,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 HelloBlinkUart [board]",
+      "passed": true,
+      "mmio_count": 89776,
+      "duration": 6.02,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 SPI Flash Test [direct]",
+      "passed": true,
+      "mmio_count": 5,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 I2C EEPROM Test [direct]",
+      "passed": true,
+      "mmio_count": 8,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 SPI LCD Test [direct]",
+      "passed": true,
+      "mmio_count": 5,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F405 SPI Flash [board]",
+      "passed": true,
+      "mmio_count": 5,
+      "duration": 6.12,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F439 Crypto CDC [direct]",
+      "passed": true,
+      "mmio_count": 94683,
+      "duration": 6.08,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F439 DMA Flash [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.02,
+      "qemu_exit": -6,
+      "error": "KNOWN: HardFault lockup: vector table init issue"
+    },
+    {
+      "name": "STM32F439 RTC [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.02,
+      "qemu_exit": -6,
+      "error": "KNOWN: HardFault lockup: vector table init issue"
+    },
+    {
+      "name": "STM32L433 I2C EEPROM [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.03,
+      "qemu_exit": -6,
+      "error": "KNOWN: HardFault lockup: vector table init issue"
+    },
+    {
+      "name": "Benchmark cortex-m0",
+      "passed": true,
+      "mmio_count": 237,
+      "duration": 8.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "Benchmark cortex-m3",
+      "passed": true,
+      "mmio_count": 237,
+      "duration": 8.02,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "Benchmark cortex-m4",
+      "passed": true,
+      "mmio_count": 237,
+      "duration": 8.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "Benchmark cortex-m7",
+      "passed": true,
+      "mmio_count": 237,
+      "duration": 8.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "Benchmark cortex-m33",
+      "passed": true,
+      "mmio_count": 237,
+      "duration": 8.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "nRF52840 EEPROM [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.03,
+      "qemu_exit": -6,
+      "error": "KNOWN: Missing flash-base QEMU property (needs 0x00000000)"
+    },
+    {
+      "name": "nRF52840 Flash [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.02,
+      "qemu_exit": -6,
+      "error": "KNOWN: Missing flash-base QEMU property (needs 0x00000000)"
+    },
+    {
+      "name": "nRF52840 QSPI [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.02,
+      "qemu_exit": -6,
+      "error": "KNOWN: Missing flash-base QEMU property (needs 0x00000000)"
+    },
+    {
+      "name": "RP2040 EEPROM [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.03,
+      "qemu_exit": -6,
+      "error": "KNOWN: Missing flash-base QEMU property (needs 0x10000000)"
+    },
+    {
+      "name": "STM32H563 TZ Secure [direct]",
+      "passed": false,
+      "mmio_count": 0,
+      "duration": 0.02,
+      "qemu_exit": -6,
+      "error": "KNOWN: Missing flash-base QEMU property (needs 0x0C000000)"
+    }
+  ]
+}
