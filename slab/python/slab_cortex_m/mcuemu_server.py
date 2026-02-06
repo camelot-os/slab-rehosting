@@ -1161,131 +1161,35 @@ DEFAULT_CONFIG = {
 # TCP SERVER
 # =============================================================================
 
-class MCUemuServer:
+from slab_cortex_m.base_server import BasePeripheralServer
+
+
+class MCUemuServer(BasePeripheralServer):
     """TCP server handling QEMU MCUemu peripheral accesses."""
-    
+
     def __init__(self, port: int, config: dict = None, usbip_port: int = 0):
-        self.port = port
-        self.usbip_port = usbip_port
+        super().__init__(port, usbip_port)
         self.config = config or DEFAULT_CONFIG
         self.peripherals: List[Peripheral] = []
-        self.running = False
-        self.client: Optional[asyncio.StreamWriter] = None
         self.usbip_server = None
         self.log = log
-    
-    def _create_peripherals(self):
+
+    def create_peripherals(self):
         """Create all peripherals from config."""
         self.peripherals.clear()
         for pcfg in self.config.get('peripherals', []):
             p = create_peripheral(pcfg)
-            p.irq_callback = self._send_irq
+            p.irq_callback = self.send_irq
             self.peripherals.append(p)
             self.log.info(f"Created {p.name:12} @ 0x{p.base:08X} - 0x{p.base + p.size - 1:08X}")
-    
-    def _find_peripheral(self, addr: int) -> Optional[Peripheral]:
+
+    def find_peripheral(self, addr: int) -> Optional[Peripheral]:
         """Find peripheral containing address."""
         for p in self.peripherals:
             if p.contains(addr):
                 return p
         return None
-    
-    def _send_irq(self, irq_num: int, level: int):
-        """Send IRQ injection command to QEMU."""
-        if self.client:
-            try:
-                packet = struct.pack('<BIB', CMD_IRQ, irq_num, level)
-                self.client.write(packet)
-                self.log.debug(f"IRQ {irq_num} level={level}")
-            except Exception as e:
-                self.log.warning(f"Failed to send IRQ {irq_num}: {e}")
-        else:
-            self.log.debug(f"IRQ {irq_num} dropped (no client)")
-    
-    async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        """Handle connected QEMU client."""
-        addr = writer.get_extra_info('peername')
-        self.log.info(f"QEMU connected from {addr}")
-        self.client = writer
-        
-        try:
-            while self.running:
-                # Read command type
-                cmd_type = await reader.read(1)
-                if not cmd_type:
-                    break
-                
-                cmd = cmd_type[0]
-                
-                if cmd in (CMD_READ, CMD_READ_S):
-                    # Read request: [addr:4][size:4][secure:1]
-                    data = await reader.readexactly(9)
-                    address, size = struct.unpack('<II', data[:8])
-                    secure = (cmd == CMD_READ_S) or (data[8] == 1)
-                    
-                    # Find peripheral and read
-                    periph = self._find_peripheral(address)
-                    if periph:
-                        value, status = periph.read(address, size, secure)
-                    else:
-                        value = 0
-                        status = STATUS_OK  # Don't error on unmapped reads
-                        self.log.debug(f"Unmapped read{'[S]' if secure else '[NS]'}: 0x{address:08X}")
-                    
-                    # Send response: [value:4][status:1]
-                    resp = struct.pack('<IB', value, status)
-                    writer.write(resp)
-                    await writer.drain()
-                
-                elif cmd in (CMD_WRITE, CMD_WRITE_S):
-                    # Write request: [addr:4][size:4][value:4][secure:1]
-                    data = await reader.readexactly(13)
-                    address, size, value = struct.unpack('<III', data[:12])
-                    secure = (cmd == CMD_WRITE_S) or (data[12] == 1)
-                    
-                    # Find peripheral and write
-                    periph = self._find_peripheral(address)
-                    if periph:
-                        status = periph.write(address, size, value, secure)
-                    else:
-                        status = STATUS_OK  # Don't error on unmapped writes
-                        self.log.debug(f"Unmapped write{'[S]' if secure else '[NS]'}: 0x{address:08X} <- 0x{value:08X}")
-                    
-                    # Send response
-                    resp = struct.pack('<IB', 0, status)
-                    writer.write(resp)
-                    await writer.drain()
-                
-                elif cmd == CMD_CONFIG:
-                    # Security configuration (from QEMU for SAU/IDAU setup)
-                    data = await reader.readexactly(10)
-                    config_cmd = data[0]
-                    region = struct.unpack('<I', data[1:5])[0]
-                    limit = struct.unpack('<I', data[5:9])[0]
-                    attrs = data[9]
-                    
-                    self.log.info(f"Security config: cmd={config_cmd} region={region} limit=0x{limit:08X} attrs={attrs}")
-                    # Could update peripheral security attributes based on SAU config
-                    
-                    resp = struct.pack('<IB', 0, STATUS_OK)
-                    writer.write(resp)
-                    await writer.drain()
-                
-                else:
-                    self.log.warning(f"Unknown command: {cmd}")
-        
-        except asyncio.IncompleteReadError:
-            self.log.info("QEMU disconnected (incomplete read)")
-        except ConnectionResetError:
-            self.log.info("QEMU disconnected (reset)")
-        except Exception as e:
-            self.log.error(f"Client error: {e}")
-        finally:
-            self.client = None
-            writer.close()
-            await writer.wait_closed()
-            self.log.info("QEMU disconnected")
-    
+
     def _find_usb_peripheral(self):
         """Find the USB OTG peripheral (if registered)."""
         from slab_cortex_m.usb_cdc_peripheral import USBCDCPeripheral
@@ -1294,17 +1198,19 @@ class MCUemuServer:
                 return p
         return None
 
-    async def start(self):
-        """Start the TCP server."""
-        self._create_peripherals()
-
-        # Start background tasks for timer peripherals
+    def _start_background_tasks(self):
+        """Start timer loops after peripherals are created."""
         for p in self.peripherals:
             if isinstance(p, Timer):
                 p.start_counter()
 
+    async def start(self):
+        """Start the TCP server."""
+        self.create_peripherals()
+        self._start_background_tasks()
+
         server = await asyncio.start_server(
-            self._handle_client,
+            self.handle_client,
             '127.0.0.1',
             self.port,
             reuse_address=True
@@ -1313,9 +1219,10 @@ class MCUemuServer:
         self.running = True
 
         # Print banner
+        config_name = self.config.get('name', 'Custom') if self.config else 'Board'
         print("\n" + "="*70)
         print("  MCUemu Peripheral Server")
-        print(f"  Configuration: {self.config.get('name', 'Custom')}")
+        print(f"  Configuration: {config_name}")
         print("="*70)
         print(f"\n[Listening] tcp://127.0.0.1:{self.port}")
         print(f"\n[Peripherals] {len(self.peripherals)} configured:")
@@ -1350,9 +1257,6 @@ class MCUemuServer:
         print()
 
         await asyncio.gather(*tasks)
-
-    async def stop(self):
-        self.running = False
 
 
 def load_config(path: str) -> dict:

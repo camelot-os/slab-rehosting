@@ -149,7 +149,7 @@ async def run(port: int, usbip_port: int, gpio_name: str, pin: int,
               use_pygame: bool):
     """Start MCUemu server + LED display."""
     server = MCUemuServer(port, DEFAULT_CONFIG, usbip_port=usbip_port)
-    server._create_peripherals()
+    server.create_peripherals()
 
     # Find target GPIO
     gpio = None
@@ -171,7 +171,7 @@ async def run(port: int, usbip_port: int, gpio_name: str, pin: int,
 
     # Start TCP server
     tcp_server = await asyncio.start_server(
-        server._handle_client,
+        server.handle_client,
         '127.0.0.1',
         port,
         reuse_address=True
