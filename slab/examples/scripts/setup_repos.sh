@@ -2,7 +2,9 @@
 #
 # MCUemu Example Repository Setup
 #
-# This script clones and sets up all required repositories for the examples.
+# Initializes git submodules for SDK dependencies used by firmware examples.
+# Core SDKs (STM32CubeF4, CMSIS_5, FreeRTOS-Kernel) are tracked as git
+# submodules under slab/examples/repos/.
 #
 # Copyright (C) 2025 TwistedWires Security Lab
 # SPDX-License-Identifier: GPL-2.0-or-later
@@ -10,85 +12,63 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXAMPLES_DIR="$(dirname "$SCRIPT_DIR")"
-REPOS_DIR="$EXAMPLES_DIR/repos"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REPOS_DIR="$SCRIPT_DIR/../repos"
 
 echo "========================================"
 echo "MCUemu Example Repository Setup"
 echo "========================================"
 
-mkdir -p "$REPOS_DIR"
-cd "$REPOS_DIR"
-
 # =============================================================================
-# STM32CubeF4 (HAL/LL Drivers)
+# Core SDKs (git submodules)
 # =============================================================================
 echo ""
-echo "--- STM32CubeF4 (HAL Drivers) ---"
-if [ ! -d "STM32CubeF4" ]; then
-    echo "Cloning STM32CubeF4..."
-    git clone --depth 1 https://github.com/STMicroelectronics/STM32CubeF4.git
-else
-    echo "STM32CubeF4 already exists, updating..."
-    cd STM32CubeF4 && git pull && cd ..
-fi
+echo "--- Initializing SDK submodules ---"
+cd "$REPO_ROOT"
+
+git submodule update --init --depth 1 -- \
+    slab/examples/repos/STM32CubeF4 \
+    slab/examples/repos/CMSIS_5 \
+    slab/examples/repos/FreeRTOS-Kernel
+
+# STM32CubeF4 has nested submodules for HAL driver and CMSIS device headers
+echo ""
+echo "--- Initializing STM32CubeF4 nested submodules ---"
+cd slab/examples/repos/STM32CubeF4
+git submodule update --init --depth 1 -- \
+    Drivers/STM32F4xx_HAL_Driver \
+    Drivers/CMSIS/Device/ST/STM32F4xx
+cd "$REPO_ROOT"
 
 # =============================================================================
-# CMSIS (ARM headers)
+# Optional: NuttX RTOS (not a submodule, clone on demand)
 # =============================================================================
 echo ""
-echo "--- CMSIS ---"
-if [ ! -d "CMSIS_5" ]; then
-    echo "Cloning CMSIS_5..."
-    git clone --depth 1 https://github.com/ARM-software/CMSIS_5.git
-else
-    echo "CMSIS_5 already exists"
-fi
-
-# =============================================================================
-# FreeRTOS Kernel
-# =============================================================================
-echo ""
-echo "--- FreeRTOS Kernel ---"
-if [ ! -d "FreeRTOS-Kernel" ]; then
-    echo "Cloning FreeRTOS-Kernel..."
-    git clone --depth 1 https://github.com/FreeRTOS/FreeRTOS-Kernel.git
-else
-    echo "FreeRTOS-Kernel already exists, updating..."
-    cd FreeRTOS-Kernel && git pull && cd ..
-fi
-
-# =============================================================================
-# NuttX RTOS
-# =============================================================================
-echo ""
-echo "--- Apache NuttX ---"
-if [ ! -d "nuttx" ]; then
+echo "--- Apache NuttX (optional) ---"
+if [ ! -d "$REPOS_DIR/nuttx" ]; then
     echo "Cloning NuttX..."
-    git clone --depth 1 https://github.com/apache/nuttx.git
+    git clone --depth 1 https://github.com/apache/nuttx.git "$REPOS_DIR/nuttx"
 else
-    echo "NuttX already exists, updating..."
-    cd nuttx && git pull && cd ..
+    echo "NuttX already exists"
 fi
 
-if [ ! -d "nuttx-apps" ]; then
+if [ ! -d "$REPOS_DIR/nuttx-apps" ]; then
     echo "Cloning NuttX Apps..."
-    git clone --depth 1 https://github.com/apache/nuttx-apps.git apps
+    git clone --depth 1 https://github.com/apache/nuttx-apps.git "$REPOS_DIR/nuttx-apps"
 else
     echo "NuttX Apps already exists"
 fi
 
 # =============================================================================
-# Zephyr RTOS
+# Optional: Zephyr RTOS (not a submodule, clone on demand)
 # =============================================================================
 echo ""
-echo "--- Zephyr RTOS ---"
-if [ ! -d "zephyr" ]; then
+echo "--- Zephyr RTOS (optional) ---"
+if [ ! -d "$REPOS_DIR/zephyr" ]; then
     echo "Cloning Zephyr..."
-    git clone --depth 1 https://github.com/zephyrproject-rtos/zephyr.git
+    git clone --depth 1 https://github.com/zephyrproject-rtos/zephyr.git "$REPOS_DIR/zephyr"
 else
-    echo "Zephyr already exists, updating..."
-    cd zephyr && git pull && cd ..
+    echo "Zephyr already exists"
 fi
 
 # =============================================================================
@@ -99,7 +79,7 @@ echo "========================================"
 echo "Repository Setup Complete!"
 echo "========================================"
 echo ""
-echo "Cloned repositories:"
+echo "SDK repositories:"
 ls -1 "$REPOS_DIR"
 echo ""
 echo "Total size:"

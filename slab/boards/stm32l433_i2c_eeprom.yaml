@@ -1,0 +1,10 @@
+name: STM32L433_I2C_EEPROM
+mcu: STM32L433
+clock: 80000000
+external_devices:
+  - type: 24C256
+    bus: I2C1
+    params: {address: 0x50}
+  - type: LED
+    bus: GPIOB
+    params: {pin: 13, color: green}

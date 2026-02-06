@@ -350,7 +350,6 @@ def build_test_cases() -> List[TestCase]:
         firmware="slab/examples/cortex-m/stm32/f439/peripherals/dma_flash/stm32f439_dma_flash_test.bin",
         cpu="cortex-m4", mode="direct", mcu="STM32F439",
         timeout=6, expect_mmio=3,
-        known_issue="HardFault lockup: vector table init issue",
     ))
 
     tests.append(TestCase(
@@ -358,7 +357,31 @@ def build_test_cases() -> List[TestCase]:
         firmware="slab/examples/cortex-m/stm32/f439/peripherals/rtc/stm32f439_rtc_test.bin",
         cpu="cortex-m4", mode="direct", mcu="STM32F439",
         timeout=6, expect_mmio=3,
-        known_issue="HardFault lockup: vector table init issue",
+    ))
+
+    # -- STM32F439 Board mode tests --
+    tests.append(TestCase(
+        name="STM32F439 Crypto CDC [board]",
+        firmware="slab/examples/cortex-m/stm32/f439/usb/crypto_cdc/stm32_crypto_cdc.bin",
+        cpu="cortex-m4", mode="board",
+        board_yaml="slab/boards/stm32f439_crypto_cdc.yaml",
+        timeout=6, expect_mmio=10,
+    ))
+
+    tests.append(TestCase(
+        name="STM32F439 DMA Flash [board]",
+        firmware="slab/examples/cortex-m/stm32/f439/peripherals/dma_flash/stm32f439_dma_flash_test.bin",
+        cpu="cortex-m4", mode="board",
+        board_yaml="slab/boards/stm32f439_dma_flash.yaml",
+        timeout=6, expect_mmio=3,
+    ))
+
+    tests.append(TestCase(
+        name="STM32F439 RTC [board]",
+        firmware="slab/examples/cortex-m/stm32/f439/peripherals/rtc/stm32f439_rtc_test.bin",
+        cpu="cortex-m4", mode="board",
+        board_yaml="slab/boards/stm32f439_rtc.yaml",
+        timeout=6, expect_mmio=3,
     ))
 
     # -- STM32L433 (direct mode with L4xx peripherals) --
@@ -367,7 +390,14 @@ def build_test_cases() -> List[TestCase]:
         firmware="slab/examples/cortex-m/stm32/l433/peripherals/i2c_eeprom/stm32l433_i2c_eeprom_test.bin",
         cpu="cortex-m4", mode="direct", mcu="STM32L433",
         timeout=6, expect_mmio=3,
-        known_issue="HardFault lockup: vector table init issue",
+    ))
+
+    tests.append(TestCase(
+        name="STM32L433 I2C EEPROM [board]",
+        firmware="slab/examples/cortex-m/stm32/l433/peripherals/i2c_eeprom/stm32l433_i2c_eeprom_test.bin",
+        cpu="cortex-m4", mode="board",
+        board_yaml="slab/boards/stm32l433_i2c_eeprom.yaml",
+        timeout=6, expect_mmio=3,
     ))
 
     # -- Benchmarks (use peripheral test registers at 0x50000000) --

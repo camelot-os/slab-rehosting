@@ -1,0 +1,10 @@
+name: NRF52840_EEPROM
+mcu: nRF52840
+clock: 64000000
+external_devices:
+  - type: 24C256
+    bus: TWIM0
+    params: {address: 0x50}
+  - type: LED
+    bus: GPIO
+    params: {pin: 13, color: green}

@@ -1,6 +1,6 @@
 {
-  "total": 22,
-  "passed": 14,
+  "total": 26,
+  "passed": 21,
   "failed": 0,
   "skipped": 0,
   "results": [
@@ -8,31 +8,31 @@
       "name": "STM32F405 HelloBlink [legacy]",
       "passed": true,
       "mmio_count": 222,
-      "duration": 6.01,
+      "duration": 6.02,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F405 HelloBlink [board]",
       "passed": true,
-      "mmio_count": 63696,
-      "duration": 6.05,
+      "mmio_count": 45651,
+      "duration": 6.07,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F405 HelloBlinkUart [legacy]",
       "passed": true,
-      "mmio_count": 95252,
-      "duration": 6.01,
+      "mmio_count": 68196,
+      "duration": 6.08,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F405 HelloBlinkUart [board]",
       "passed": true,
-      "mmio_count": 89776,
-      "duration": 6.02,
+      "mmio_count": 65416,
+      "duration": 6.1,
       "qemu_exit": 124,
       "error": ""
     },
@@ -64,41 +64,73 @@
       "name": "STM32F405 SPI Flash [board]",
       "passed": true,
       "mmio_count": 5,
-      "duration": 6.12,
+      "duration": 6.17,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F439 Crypto CDC [direct]",
       "passed": true,
-      "mmio_count": 94683,
-      "duration": 6.08,
+      "mmio_count": 67262,
+      "duration": 6.11,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F439 DMA Flash [direct]",
-      "passed": false,
-      "mmio_count": 0,
-      "duration": 0.02,
-      "qemu_exit": -6,
-      "error": "KNOWN: HardFault lockup: vector table init issue"
+      "passed": true,
+      "mmio_count": 24,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
     },
     {
       "name": "STM32F439 RTC [direct]",
-      "passed": false,
-      "mmio_count": 0,
-      "duration": 0.02,
-      "qemu_exit": -6,
-      "error": "KNOWN: HardFault lockup: vector table init issue"
+      "passed": true,
+      "mmio_count": 6,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F439 Crypto CDC [board]",
+      "passed": true,
+      "mmio_count": 65329,
+      "duration": 6.06,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F439 DMA Flash [board]",
+      "passed": true,
+      "mmio_count": 24,
+      "duration": 6.13,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32F439 RTC [board]",
+      "passed": true,
+      "mmio_count": 6,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
     },
     {
       "name": "STM32L433 I2C EEPROM [direct]",
-      "passed": false,
-      "mmio_count": 0,
-      "duration": 0.03,
-      "qemu_exit": -6,
-      "error": "KNOWN: HardFault lockup: vector table init issue"
+      "passed": true,
+      "mmio_count": 23,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
+    },
+    {
+      "name": "STM32L433 I2C EEPROM [board]",
+      "passed": true,
+      "mmio_count": 23,
+      "duration": 6.01,
+      "qemu_exit": 124,
+      "error": ""
     },
     {
       "name": "Benchmark cortex-m0",
@@ -112,7 +144,7 @@
       "name": "Benchmark cortex-m3",
       "passed": true,
       "mmio_count": 237,
-      "duration": 8.02,
+      "duration": 8.01,
       "qemu_exit": 124,
       "error": ""
     },

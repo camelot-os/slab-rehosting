@@ -1,0 +1,9 @@
+name: STM32F439_DMA_Flash
+mcu: STM32F439
+clock: 180000000
+external_devices:
+  - type: W25Q128
+    bus: SPI1
+  - type: LED
+    bus: GPIOA
+    params: {pin: 13, color: green}

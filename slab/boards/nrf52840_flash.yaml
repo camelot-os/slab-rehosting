@@ -1,0 +1,9 @@
+name: NRF52840_Flash
+mcu: nRF52840
+clock: 64000000
+external_devices:
+  - type: W25Q128
+    bus: SPIM3
+  - type: LED
+    bus: GPIO
+    params: {pin: 13, color: green}

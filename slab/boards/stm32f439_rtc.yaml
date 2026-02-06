@@ -1,0 +1,7 @@
+name: STM32F439_RTC
+mcu: STM32F439
+clock: 180000000
+external_devices:
+  - type: LED
+    bus: GPIOA
+    params: {pin: 13, color: green}

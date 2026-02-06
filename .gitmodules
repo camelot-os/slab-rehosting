@@ -48,3 +48,12 @@
 [submodule "slab/examples/cortex-m/stm32/f405/demos/hello_blink/STM32CubeF4"]
 	path = slab/examples/cortex-m/stm32/f405/demos/hello_blink/STM32CubeF4
 	url = https://github.com/STMicroelectronics/STM32CubeF4.git
+[submodule "slab/examples/repos/STM32CubeF4"]
+	path = slab/examples/repos/STM32CubeF4
+	url = https://github.com/STMicroelectronics/STM32CubeF4.git
+[submodule "slab/examples/repos/CMSIS_5"]
+	path = slab/examples/repos/CMSIS_5
+	url = https://github.com/ARM-software/CMSIS_5.git
+[submodule "slab/examples/repos/FreeRTOS-Kernel"]
+	path = slab/examples/repos/FreeRTOS-Kernel
+	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git

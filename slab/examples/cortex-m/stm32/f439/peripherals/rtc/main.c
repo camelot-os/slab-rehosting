@@ -279,9 +279,30 @@ int main(void)
     return 0;
 }
 
+/* Default handler for unused interrupts */
+void Default_Handler(void) { while (1); }
+
 /* Reset handler */
 void Reset_Handler(void)
 {
     main();
     while (1);
 }
+
+/* Vector table - must be placed at flash start */
+__attribute__((section(".vectors")))
+void (* const vectors[])(void) = {
+    (void (*)(void))0x20030000,  /* Initial SP (192KB SRAM) */
+    Reset_Handler,               /* Reset */
+    Default_Handler,             /* NMI */
+    Default_Handler,             /* HardFault */
+    Default_Handler,             /* MemManage */
+    Default_Handler,             /* BusFault */
+    Default_Handler,             /* UsageFault */
+    0, 0, 0, 0,                 /* Reserved */
+    Default_Handler,             /* SVCall */
+    Default_Handler,             /* Debug */
+    0,                           /* Reserved */
+    Default_Handler,             /* PendSV */
+    Default_Handler,             /* SysTick */
+};

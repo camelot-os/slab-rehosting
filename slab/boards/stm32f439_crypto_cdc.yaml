@@ -1,0 +1,11 @@
+name: STM32F439_Crypto_CDC
+mcu: STM32F439
+clock: 180000000
+usb:
+  type: dwc2_otg_fs
+  base: 0x50000000
+  irq: 67
+external_devices:
+  - type: LED
+    bus: GPIOA
+    params: {pin: 13, color: green}
