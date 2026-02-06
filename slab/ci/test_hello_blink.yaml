@@ -1,0 +1,20 @@
+scenarios:
+  - name: "STM32F405 LED blink"
+    board: slab/boards/stm32f405_hello_blink.yaml
+    firmware: slab/examples/cortex-m/stm32/f405/demos/hello_blink/build/HelloBlink.bin
+    timeout: 10
+    assertions:
+      - type: no_crash
+      - type: gpio_toggle
+        params: {gpio: GPIOA, pin: 13, min_toggles: 4}
+      - type: mmio_count
+        params: {min: 50}
+
+  - name: "STM32F405 HelloBlinkUart"
+    board: slab/boards/stm32f405_hello_blink.yaml
+    firmware: slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin
+    timeout: 10
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 50}

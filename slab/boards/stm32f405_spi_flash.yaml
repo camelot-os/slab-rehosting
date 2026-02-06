@@ -1,0 +1,8 @@
+name: STM32F405_SPI_Flash
+mcu: STM32F405
+external_devices:
+  - type: W25Q128
+    bus: SPI1
+  - type: LED
+    bus: GPIOA
+    params: {pin: 5, color: green}

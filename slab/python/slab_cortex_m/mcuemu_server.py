@@ -1278,14 +1278,47 @@ def load_config(path: str) -> dict:
 
 
 async def main_async(args):
-    config = load_config(args.config)
     usbip_port = getattr(args, 'usbip_port', 0)
-    server = MCUemuServer(args.port, config, usbip_port=usbip_port)
 
-    try:
-        await server.start()
-    except asyncio.CancelledError:
-        await server.stop()
+    if hasattr(args, 'board') and args.board:
+        # Board mode: use rich peripheral sets via board builder
+        from slab_cortex_m.board import load_board_config
+        from slab_cortex_m.board_builder import build_board
+        board_config = load_board_config(args.board)
+        board = build_board(board_config)
+
+        # Create a thin server wrapper
+        from slab_cortex_m.base_server import BasePeripheralServer
+        class BoardServer(BasePeripheralServer):
+            def __init__(self, port, board, usbip_port):
+                super().__init__(port, usbip_port)
+                self.board = board
+                self.board.irq_callback = self.send_irq
+            def create_peripherals(self):
+                pass
+            def find_peripheral(self, addr):
+                if self.board.contains(addr):
+                    return self.board
+                return None
+
+        server = BoardServer(args.port, board, usbip_port)
+        server.running = True
+        tcp_server = await asyncio.start_server(
+            server.handle_client, '127.0.0.1', args.port, reuse_address=True)
+
+        print(f"\n[Board] {board_config.name} ({board_config.mcu})")
+        print(f"[Listening] tcp://127.0.0.1:{args.port}")
+        print(f"[Peripherals] {len(board.adapter.peripherals)}")
+        await tcp_server.serve_forever()
+
+    else:
+        # Legacy mode: use built-in simple peripherals
+        config = load_config(args.config if hasattr(args, 'config') else None)
+        server = MCUemuServer(args.port, config, usbip_port=usbip_port)
+        try:
+            await server.start()
+        except asyncio.CancelledError:
+            await server.stop()
 
 
 def main():
@@ -1295,14 +1328,16 @@ def main():
     parser.add_argument('--usbip-port', type=int, default=0,
                        help='USBIP server port (0 = disabled, default: 0)')
     parser.add_argument('--config', '-c', type=str,
-                       help='Peripheral config file (YAML/JSON)')
+                       help='Peripheral config file (YAML/JSON, legacy mode)')
+    parser.add_argument('--board', '-b', type=str,
+                       help='Board config file (YAML) for rich peripheral support')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable debug logging')
     args = parser.parse_args()
-    
+
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
     try:
         asyncio.run(main_async(args))
     except KeyboardInterrupt:
