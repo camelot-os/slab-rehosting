@@ -485,7 +485,7 @@ void Default_Handler(void)
     while (1);
 }
 
-__attribute__((section(".isr_vector")))
+__attribute__((section(".vectors")))
 void (* const vectors[])(void) = {
     (void (*)(void))0x20040000,  /* Initial stack pointer (256KB SRAM) */
     Reset_Handler,

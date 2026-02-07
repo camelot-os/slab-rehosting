@@ -372,3 +372,24 @@ void Reset_Handler(void)
     main();
     while (1);
 }
+
+void Default_Handler(void)
+{
+    while (1);
+}
+
+__attribute__((section(".vectors")))
+void (* const vectors[])(void) = {
+    (void (*)(void))0x20040000,  /* Initial stack pointer (256KB SRAM) */
+    Reset_Handler,
+    Default_Handler,  /* NMI */
+    Default_Handler,  /* HardFault */
+    Default_Handler,  /* MemManage */
+    Default_Handler,  /* BusFault */
+    Default_Handler,  /* UsageFault */
+    0, 0, 0, 0,       /* Reserved */
+    Default_Handler,  /* SVCall */
+    0, 0,              /* Reserved */
+    Default_Handler,  /* PendSV */
+    Default_Handler,  /* SysTick */
+};

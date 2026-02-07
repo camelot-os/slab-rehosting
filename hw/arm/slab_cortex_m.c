@@ -959,36 +959,11 @@ static void slab_cortex_m_init(MachineState *machine)
     DeviceState *proxy_dev;
     bool is_armv8m = false;
 
-    /* Apply defaults */
+    /* Apply defaults (only for fields that can't be zero).
+     * Memory layout defaults are set in instance_init() to allow
+     * flash_base=0 (e.g. nRF52840). */
     if (!s->cpu_type || strlen(s->cpu_type) == 0) {
         s->cpu_type = g_strdup("cortex-m4");
-    }
-    if (s->flash_size == 0) {
-        s->flash_size = 0x100000;    /* 1MB */
-    }
-    if (s->sram_size == 0) {
-        s->sram_size = 0x40000;      /* 256KB */
-    }
-    if (s->flash_base == 0) {
-        s->flash_base = 0x08000000;
-    }
-    if (s->sram_base == 0) {
-        s->sram_base = 0x20000000;
-    }
-    if (s->periph_base == 0) {
-        s->periph_base = 0x40000000;
-    }
-    if (s->periph_size == 0) {
-        s->periph_size = 0x20000000;
-    }
-    if (s->tcp_port == 0) {
-        s->tcp_port = 5555;
-    }
-    if (s->num_irqs == 0) {
-        s->num_irqs = 240;
-    }
-    if (s->sysclk_hz == 0) {
-        s->sysclk_hz = 168000000;
     }
 
     /* Detect ARMv8-M CPUs (TrustZone capable) */
@@ -1044,10 +1019,13 @@ static void slab_cortex_m_init(MachineState *machine)
                            s->flash_size, &error_fatal);
     memory_region_add_subregion(get_system_memory(), s->flash_base, &s->flash);
 
-    /* Flash alias at address 0 for vector table */
-    memory_region_init_alias(&s->flash_alias, NULL, "slab.flash.alias",
-                             &s->flash, 0, s->flash_size);
-    memory_region_add_subregion(get_system_memory(), 0, &s->flash_alias);
+    /* Flash alias at address 0 for vector table.
+     * Skip when flash is already at 0 (e.g. nRF52840) to avoid overlap. */
+    if (s->flash_base != 0) {
+        memory_region_init_alias(&s->flash_alias, NULL, "slab.flash.alias",
+                                 &s->flash, 0, s->flash_size);
+        memory_region_add_subregion(get_system_memory(), 0, &s->flash_alias);
+    }
 
     /* Initialize SRAM */
     memory_region_init_ram(&s->sram, NULL, "slab.sram",
@@ -1304,6 +1282,68 @@ static void slab_cortex_m_set_usbip_port(Object *obj, const char *value, Error *
     s->usbip_port = port;
 }
 
+/* ---- Memory layout property getters/setters ---- */
+
+static char *slab_cortex_m_get_flash_base(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%08x", s->flash_base);
+}
+
+static void slab_cortex_m_set_flash_base(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    s->flash_base = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_flash_size(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%x", s->flash_size);
+}
+
+static void slab_cortex_m_set_flash_size(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    if (v == 0 || v > 64 * 1024 * 1024) {
+        error_setg(errp, "flash-size must be between 1 and 64MB");
+        return;
+    }
+    s->flash_size = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_sram_base(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%08x", s->sram_base);
+}
+
+static void slab_cortex_m_set_sram_base(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    s->sram_base = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_sram_size(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%x", s->sram_size);
+}
+
+static void slab_cortex_m_set_sram_size(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    if (v == 0 || v > 64 * 1024 * 1024) {
+        error_setg(errp, "sram-size must be between 1 and 64MB");
+        return;
+    }
+    s->sram_size = (uint32_t)v;
+}
+
 static void slab_cortex_m_instance_init(Object *obj)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
@@ -1396,6 +1436,31 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
                                   slab_cortex_m_set_usbip_port);
     object_class_property_set_description(oc, "usbip-port",
         "USBIP server port for DWC2 USB device controller (0 = disabled, default: 0)");
+
+    /* Memory layout properties */
+    object_class_property_add_str(oc, "flash-base",
+                                  slab_cortex_m_get_flash_base,
+                                  slab_cortex_m_set_flash_base);
+    object_class_property_set_description(oc, "flash-base",
+        "Flash base address (default: 0x08000000)");
+
+    object_class_property_add_str(oc, "flash-size",
+                                  slab_cortex_m_get_flash_size,
+                                  slab_cortex_m_set_flash_size);
+    object_class_property_set_description(oc, "flash-size",
+        "Flash size in bytes (default: 0x100000 = 1MB)");
+
+    object_class_property_add_str(oc, "sram-base",
+                                  slab_cortex_m_get_sram_base,
+                                  slab_cortex_m_set_sram_base);
+    object_class_property_set_description(oc, "sram-base",
+        "SRAM base address (default: 0x20000000)");
+
+    object_class_property_add_str(oc, "sram-size",
+                                  slab_cortex_m_get_sram_size,
+                                  slab_cortex_m_set_sram_size);
+    object_class_property_set_description(oc, "sram-size",
+        "SRAM size in bytes (default: 0x40000 = 256KB)");
 }
 
 static const TypeInfo slab_cortex_m_info = {
