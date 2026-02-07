@@ -49,6 +49,7 @@ class BasePeripheralServer(ABC):
         self.usbip_port = usbip_port
         self.running = False
         self.client: Optional[asyncio.StreamWriter] = None
+        self.tracer = None  # Optional[MMIOTracer] -- set to enable MMIO tracing
         self.log = logging.getLogger(self.__class__.__name__)
 
     @abstractmethod
@@ -103,6 +104,9 @@ class BasePeripheralServer(ABC):
                             f"Unmapped read{'[S]' if secure else '[NS]'}: "
                             f"0x{address:08X}")
 
+                    if self.tracer:
+                        self.tracer.trace_read(address, size, value, periph)
+
                     resp = struct.pack('<IB', value, status)
                     writer.write(resp)
                     await writer.drain()
@@ -120,6 +124,9 @@ class BasePeripheralServer(ABC):
                         self.log.debug(
                             f"Unmapped write{'[S]' if secure else '[NS]'}: "
                             f"0x{address:08X} <- 0x{value:08X}")
+
+                    if self.tracer:
+                        self.tracer.trace_write(address, size, value, periph)
 
                     resp = struct.pack('<IB', 0, status)
                     writer.write(resp)
