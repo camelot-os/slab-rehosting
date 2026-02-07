@@ -6,18 +6,23 @@ __pycache__/
 dist/
 build/
 .eggs/
+*.egg
+.venv/
+venv/
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
+.mypy_cache/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
 
 # Build artifacts
 *.o
@@ -25,14 +30,23 @@ htmlcov/
 *.so
 *.bin
 *.elf
+*.hex
+*.map
 
 # Docs build
 docs/build/
 docs/source/_build/
 
+# Reports output
+reports/
+
 # Logs and temp files
 *.log
 *.tmp
+
+# Local config
+CLAUDE.md
+.claude/
 
 # SVD files (download separately)
 svd/
