@@ -1,6 +1,8 @@
 name: RP2040_EEPROM
 mcu: RP2040
 clock: 125000000
+qemu_extra:
+  flash-base: "0x10000000"
 external_devices:
   - type: 24C256
     bus: I2C0

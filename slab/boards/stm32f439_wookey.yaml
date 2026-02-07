@@ -1,0 +1,26 @@
+name: STM32F439_WooKey
+mcu: STM32F439
+clock: 180000000
+qemu_extra:
+  flash-size: "0x200000"
+  sram-size: "0x40000"
+usb:
+  type: dwc2_otg_hs
+  base: 0x40040000
+  irq: 77
+external_devices:
+  - type: ILI9341
+    bus: SPI1
+    params: {dc_pin: 9, cs_pin: 4}
+  - type: LED
+    bus: GPIOD
+    params: {pin: 11, color: green}
+  - type: LED
+    bus: GPIOD
+    params: {pin: 12, color: orange}
+  - type: LED
+    bus: GPIOD
+    params: {pin: 13, color: red}
+  - type: LED
+    bus: GPIOD
+    params: {pin: 14, color: blue}

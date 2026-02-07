@@ -496,5 +496,329 @@ scenarios:
         self.assertEqual(server.mmio_count, 1)  # unchanged
 
 
+# =============================================================================
+# WIRING TESTS
+# =============================================================================
+
+class TestWiring(unittest.TestCase):
+    """Test that external devices are correctly wired to bus peripherals."""
+
+    def test_spi_flash_jedec_stm32(self):
+        """STM32 SPI1 + W25Q128: byte-level JEDEC ID read."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_SPI_Flash",
+            mcu="STM32F405",
+            external_devices=[
+                ExternalDevice(type="W25Q128", bus="SPI1"),
+            ],
+        )
+        board = build_board(config)
+        self.assertEqual(len(board.external_devices), 1)
+
+        flash = board.external_devices[0]
+        # Find SPI1 peripheral and verify on_transfer is wired
+        spi1 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'SPI1':
+                spi1 = p
+                break
+        self.assertIsNotNone(spi1)
+        self.assertIsNotNone(spi1.on_transfer)
+
+        # Simulate byte-level JEDEC ID read: cmd 0x9F + 3 dummy bytes
+        r0 = spi1.on_transfer(0x9F)  # Command byte
+        r1 = spi1.on_transfer(0xFF)  # Manufacturer
+        r2 = spi1.on_transfer(0xFF)  # Memory type
+        r3 = spi1.on_transfer(0xFF)  # Capacity
+
+        self.assertEqual(r1, 0xEF)  # Winbond
+        self.assertEqual(r2, 0x40)  # Memory type
+        self.assertEqual(r3, 0x18)  # W25Q128 = 128Mbit
+
+        # Reset transaction for next CS cycle
+        flash.reset_byte_transaction()
+
+    def test_spi_flash_write_read_stm32(self):
+        """STM32 SPI1 + W25Q128: write data, read back."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_SPI_WR",
+            mcu="STM32F405",
+            external_devices=[
+                ExternalDevice(type="W25Q128", bus="SPI1"),
+            ],
+        )
+        board = build_board(config)
+        flash = board.external_devices[0]
+
+        spi1 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'SPI1':
+                spi1 = p
+                break
+
+        # Write enable (cmd 0x06)
+        spi1.on_transfer(0x06)
+        flash.reset_byte_transaction()
+
+        # Page program at address 0x000000: write 4 bytes
+        spi1.on_transfer(0x02)  # PAGE_PROGRAM
+        spi1.on_transfer(0x00)  # Addr high
+        spi1.on_transfer(0x00)  # Addr mid
+        spi1.on_transfer(0x00)  # Addr low
+        spi1.on_transfer(0xDE)
+        spi1.on_transfer(0xAD)
+        spi1.on_transfer(0xBE)
+        spi1.on_transfer(0xEF)
+        flash.reset_byte_transaction()  # Commits the write
+
+        # Read back (cmd 0x03)
+        spi1.on_transfer(0x03)  # READ_DATA
+        spi1.on_transfer(0x00)
+        spi1.on_transfer(0x00)
+        spi1.on_transfer(0x00)
+        d0 = spi1.on_transfer(0xFF)
+        d1 = spi1.on_transfer(0xFF)
+        d2 = spi1.on_transfer(0xFF)
+        d3 = spi1.on_transfer(0xFF)
+        flash.reset_byte_transaction()
+
+        self.assertEqual([d0, d1, d2, d3], [0xDE, 0xAD, 0xBE, 0xEF])
+
+    def test_i2c_eeprom_write_read_stm32(self):
+        """STM32 I2C1 + 24C256: write via I2C adapter, read back."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_I2C_EEPROM",
+            mcu="STM32L433",
+            external_devices=[
+                ExternalDevice(type="24C256", bus="I2C1",
+                               params={'address': 0x50}),
+            ],
+        )
+        board = build_board(config)
+        self.assertEqual(len(board.external_devices), 1)
+
+        eeprom = board.external_devices[0]
+        i2c1 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'I2C1':
+                i2c1 = p
+                break
+        self.assertIsNotNone(i2c1)
+        self.assertIsNotNone(i2c1.on_start)
+        self.assertIsNotNone(i2c1.on_write)
+        self.assertIsNotNone(i2c1.on_read)
+        self.assertIsNotNone(i2c1.on_stop)
+
+        # Write 4 bytes at address 0x0010
+        i2c1.on_start(0x50, False)   # Write mode
+        i2c1.on_write(0x00)          # Address high byte
+        i2c1.on_write(0x10)          # Address low byte
+        i2c1.on_write(0xAA)          # Data byte 0
+        i2c1.on_write(0xBB)          # Data byte 1
+        i2c1.on_write(0xCC)          # Data byte 2
+        i2c1.on_write(0xDD)          # Data byte 3
+        i2c1.on_stop()               # Commits the write
+
+        # Set read address
+        i2c1.on_start(0x50, False)
+        i2c1.on_write(0x00)
+        i2c1.on_write(0x10)
+        i2c1.on_stop()
+
+        # Read back
+        i2c1.on_start(0x50, True)
+        d0 = i2c1.on_read()
+        d1 = i2c1.on_read()
+        d2 = i2c1.on_read()
+        d3 = i2c1.on_read()
+        i2c1.on_stop()
+
+        self.assertEqual([d0, d1, d2, d3], [0xAA, 0xBB, 0xCC, 0xDD])
+
+    def test_nrf_spim_flash_jedec(self):
+        """NRF SPIM3 + W25Q128: packet-level JEDEC ID read."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_NRF_SPI",
+            mcu="nRF52840",
+            external_devices=[
+                ExternalDevice(type="W25Q128", bus="SPIM3"),
+            ],
+        )
+        board = build_board(config)
+        self.assertEqual(len(board.external_devices), 1)
+
+        spim3 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'SPIM3':
+                spim3 = p
+                break
+        self.assertIsNotNone(spim3)
+        self.assertIsNotNone(spim3.on_transfer)
+
+        # Packet-level JEDEC read
+        miso = spim3.on_transfer(b'\x9f\xff\xff\xff')
+        self.assertEqual(miso[1], 0xEF)
+        self.assertEqual(miso[2], 0x40)
+        self.assertEqual(miso[3], 0x18)
+
+    def test_nrf_twim_eeprom(self):
+        """NRF TWIM0 + 24C256: verify wiring."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_NRF_I2C",
+            mcu="nRF52840",
+            external_devices=[
+                ExternalDevice(type="24C256", bus="TWIM0",
+                               params={'address': 0x50}),
+            ],
+        )
+        board = build_board(config)
+        self.assertEqual(len(board.external_devices), 1)
+
+        twim0 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'TWIM0':
+                twim0 = p
+                break
+        self.assertIsNotNone(twim0)
+        self.assertIsNotNone(twim0.on_transfer)
+
+        # Write data via TWIM
+        twim0.on_transfer(0x50, bytes([0x00, 0x00, 0x42, 0x43]), False)
+
+        # Read back
+        result = twim0.on_transfer(0x50, bytes([0x00, 0x00]), False)
+        data = twim0.on_transfer(0x50, bytes(2), True)
+        self.assertEqual(data[0], 0x42)
+        self.assertEqual(data[1], 0x43)
+
+    def test_uart_capture(self):
+        """Board.uart_output captures USART TX bytes."""
+        from slab_cortex_m.board import BoardConfig
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(name="Test_UART", mcu="STM32F405")
+        board = build_board(config)
+
+        self.assertIsInstance(board.uart_output, bytearray)
+        self.assertEqual(len(board.uart_output), 0)
+
+        # Find USART1 and call on_tx directly
+        usart1 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'USART1':
+                usart1 = p
+                break
+        self.assertIsNotNone(usart1)
+        self.assertIsNotNone(usart1.on_tx)
+
+        # Simulate TX
+        usart1.on_tx(0x48)  # 'H'
+        usart1.on_tx(0x69)  # 'i'
+        self.assertEqual(board.uart_output, bytearray(b'Hi'))
+
+    def test_led_tracking(self):
+        """Board.led_states tracks GPIO pin changes for LEDs."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_LED",
+            mcu="STM32F405",
+            external_devices=[
+                ExternalDevice(type="LED", bus="GPIOA",
+                               params={'pin': 5, 'color': 'green'}),
+            ],
+        )
+        board = build_board(config)
+
+        self.assertIn('GPIOA:5', board.led_states)
+        self.assertEqual(board.led_states['GPIOA:5']['color'], 'green')
+        self.assertFalse(board.led_states['GPIOA:5']['state'])
+
+        # Simulate GPIO pin change
+        gpioa = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'GPIOA':
+                gpioa = p
+                break
+        self.assertIsNotNone(gpioa)
+
+        # Trigger on_pin_change callback
+        if gpioa.on_pin_change:
+            gpioa.on_pin_change(5, 1, True)  # pin 5, high, output
+            self.assertTrue(board.led_states['GPIOA:5']['state'])
+            gpioa.on_pin_change(5, 0, True)  # pin 5, low, output
+            self.assertFalse(board.led_states['GPIOA:5']['state'])
+
+    def test_ili9341_wiring_stm32(self):
+        """ILI9341 LCD is created and wired to STM32 SPI."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_LCD",
+            mcu="STM32F439",
+            external_devices=[
+                ExternalDevice(type="ILI9341", bus="SPI1",
+                               params={'dc_pin': 9, 'cs_pin': 4}),
+            ],
+        )
+        board = build_board(config)
+        self.assertEqual(len(board.external_devices), 1)
+
+        lcd = board.external_devices[0]
+        self.assertEqual(lcd.name, "ILI9341")
+
+        spi1 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'SPI1':
+                spi1 = p
+                break
+        self.assertIsNotNone(spi1)
+        self.assertIsNotNone(spi1.on_transfer)
+
+    def test_transaction_logging(self):
+        """External device transactions are logged."""
+        from slab_cortex_m.board import BoardConfig, ExternalDevice
+        from slab_cortex_m.board_builder import build_board
+
+        config = BoardConfig(
+            name="Test_Txn",
+            mcu="nRF52840",
+            external_devices=[
+                ExternalDevice(type="W25Q128", bus="SPIM3"),
+            ],
+        )
+        board = build_board(config)
+        flash = board.external_devices[0]
+
+        self.assertEqual(len(flash.get_transaction_log()), 0)
+
+        # Do a JEDEC read
+        spim3 = None
+        for p in board.adapter.peripherals:
+            if getattr(p, 'name', '') == 'SPIM3':
+                spim3 = p
+                break
+        spim3.on_transfer(b'\x9f\xff\xff\xff')
+
+        self.assertGreater(len(flash.get_transaction_log()), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

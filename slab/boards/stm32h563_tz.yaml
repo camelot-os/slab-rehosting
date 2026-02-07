@@ -1,6 +1,10 @@
 name: STM32H563_TZ
 mcu: STM32H563
 clock: 250000000
+qemu_extra:
+  flash-base: "0x0C000000"
+  sram-base: "0x30000000"
+  sram-size: "0x50000"
 external_devices:
   - type: LED
     bus: GPIOA

@@ -383,6 +383,12 @@ class W25QxxFlash(SPIDevice):
         self._powered_down = False
         self._address_mode_4byte = self.size > 16 * 1024 * 1024
 
+        # Byte-level SPI state machine (for STM32 byte-at-a-time SPI)
+        self._byte_buf = bytearray()
+        self._byte_cmd = 0
+        self._byte_addr = 0
+        self._byte_write_data = bytearray()
+
     def reset(self) -> None:
         """Reset flash."""
         self._sr1 = 0x00
@@ -530,6 +536,157 @@ class W25QxxFlash(SPIDevice):
     def get_contents(self) -> bytes:
         """Get full memory contents."""
         return bytes(self._memory)
+
+    # ----- Byte-level SPI interface (for STM32 byte-at-a-time transfers) -----
+
+    def transfer_byte(self, mosi_byte: int) -> int:
+        """Process one SPI byte, return MISO byte.
+
+        Maintains internal state across bytes within a CS assertion.
+        Call reset_byte_transaction() when CS is de-asserted.
+        """
+        pos = len(self._byte_buf)
+        self._byte_buf.append(mosi_byte)
+
+        if pos == 0:
+            # Command byte
+            self._byte_cmd = mosi_byte
+            self._byte_addr = 0
+            self._byte_write_data.clear()
+
+            # Commands with immediate side effects
+            if mosi_byte == self.CMD_WRITE_ENABLE:
+                self._sr1 |= self.SR1_WEL
+            elif mosi_byte == self.CMD_WRITE_DISABLE:
+                self._sr1 &= ~self.SR1_WEL
+            elif mosi_byte == self.CMD_POWER_DOWN:
+                self._powered_down = True
+            elif mosi_byte == self.CMD_RELEASE_PWDN:
+                self._powered_down = False
+            return 0xFF
+
+        cmd = self._byte_cmd
+
+        if self._powered_down and cmd != self.CMD_RELEASE_PWDN:
+            return 0xFF
+
+        # Address bytes (positions 1-3)
+        if cmd in (self.CMD_READ_DATA, self.CMD_FAST_READ, self.CMD_PAGE_PROGRAM,
+                   self.CMD_SECTOR_ERASE, self.CMD_BLOCK_ERASE_32K,
+                   self.CMD_BLOCK_ERASE_64K, self.CMD_MFR_DEVICE_ID):
+            if pos <= 3:
+                self._byte_addr = (self._byte_addr << 8) | mosi_byte
+                return 0xFF
+
+        # Data phase
+        if cmd == self.CMD_JEDEC_ID:
+            jedec = self.JEDEC_IDS.get(self.model, (0xEF, 0x40, 0x18))
+            if pos <= 3:
+                return jedec[pos - 1]
+            return 0xFF
+
+        elif cmd == self.CMD_READ_STATUS_1:
+            return self._sr1
+
+        elif cmd == self.CMD_READ_STATUS_2:
+            return self._sr2
+
+        elif cmd == self.CMD_READ_STATUS_3:
+            return self._sr3
+
+        elif cmd == self.CMD_READ_DATA:
+            if pos >= 4:
+                addr = (self._byte_addr + (pos - 4)) % self.size
+                return self._memory[addr]
+            return 0xFF
+
+        elif cmd == self.CMD_FAST_READ:
+            if pos == 4:
+                return 0xFF  # Dummy byte
+            if pos >= 5:
+                addr = (self._byte_addr + (pos - 5)) % self.size
+                return self._memory[addr]
+            return 0xFF
+
+        elif cmd == self.CMD_PAGE_PROGRAM:
+            if pos >= 4:
+                self._byte_write_data.append(mosi_byte)
+            return 0xFF
+
+        elif cmd == self.CMD_MFR_DEVICE_ID:
+            if pos == 4:
+                return 0xEF  # Winbond
+            elif pos == 5:
+                return 0x17  # Device ID
+            return 0xFF
+
+        elif cmd == self.CMD_RELEASE_PWDN:
+            if pos == 4:
+                return 0x17  # Device ID
+            return 0xFF
+
+        return 0xFF
+
+    def reset_byte_transaction(self) -> None:
+        """Flush pending write/erase from byte-level transaction.
+
+        Must be called when CS is de-asserted to commit writes/erases.
+        """
+        cmd = self._byte_cmd
+        addr = self._byte_addr
+
+        if cmd == self.CMD_PAGE_PROGRAM and self._byte_write_data:
+            if self._sr1 & self.SR1_WEL:
+                page_start = addr & ~0xFF
+                for i, byte in enumerate(self._byte_write_data):
+                    write_addr = page_start | ((addr + i) & 0xFF)
+                    if write_addr < self.size:
+                        self._memory[write_addr] &= byte
+                self._sr1 &= ~self.SR1_WEL
+                self.emit('programmed', addr, len(self._byte_write_data))
+
+        elif cmd == self.CMD_SECTOR_ERASE:
+            if self._sr1 & self.SR1_WEL:
+                sector_start = addr & ~0xFFF
+                for i in range(4096):
+                    if sector_start + i < self.size:
+                        self._memory[sector_start + i] = 0xFF
+                self._sr1 &= ~self.SR1_WEL
+                self.emit('erased', sector_start, 4096)
+
+        elif cmd == self.CMD_BLOCK_ERASE_32K:
+            if self._sr1 & self.SR1_WEL:
+                block_start = addr & ~0x7FFF
+                for i in range(32768):
+                    if block_start + i < self.size:
+                        self._memory[block_start + i] = 0xFF
+                self._sr1 &= ~self.SR1_WEL
+                self.emit('erased', block_start, 32768)
+
+        elif cmd == self.CMD_BLOCK_ERASE_64K:
+            if self._sr1 & self.SR1_WEL:
+                block_start = addr & ~0xFFFF
+                for i in range(65536):
+                    if block_start + i < self.size:
+                        self._memory[block_start + i] = 0xFF
+                self._sr1 &= ~self.SR1_WEL
+                self.emit('erased', block_start, 65536)
+
+        elif cmd in (self.CMD_CHIP_ERASE, self.CMD_CHIP_ERASE_ALT):
+            if self._sr1 & self.SR1_WEL:
+                self._memory = bytearray([0xFF] * self.size)
+                self._sr1 &= ~self.SR1_WEL
+                self.emit('chip_erased')
+
+        # Log the byte-level transaction
+        if self._byte_buf:
+            self._transactions.append(SPITransaction(
+                bytes(self._byte_buf), b''))
+
+        self._byte_buf.clear()
+        self._byte_cmd = 0
+        self._byte_addr = 0
+        self._byte_write_data.clear()
 
 
 # =============================================================================

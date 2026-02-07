@@ -35,6 +35,7 @@ from xml.etree.ElementTree import Element, SubElement, ElementTree
 from slab_cortex_m.board import BoardConfig, load_board_config, MCU_REGISTRY, get_qemu_cpu
 from slab_cortex_m.board_builder import build_board
 from slab_cortex_m.base_server import BasePeripheralServer
+from slab_cortex_m.mmio_tracer import MMIOTracer
 
 log = logging.getLogger('CIRunner')
 
@@ -100,6 +101,7 @@ class CIBoardServer(BasePeripheralServer):
         self.board = board
         self.board.irq_callback = self.send_irq
         self.mmio_count = 0
+        self.tracer = MMIOTracer()
         self.gpio_toggles: Dict[str, int] = {}  # "GPIOA.13" -> count
         self._prev_gpio_states: Dict[str, int] = {}
 

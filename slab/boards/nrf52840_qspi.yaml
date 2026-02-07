@@ -1,6 +1,8 @@
 name: NRF52840_QSPI
 mcu: nRF52840
 clock: 64000000
+qemu_extra:
+  flash-base: "0x00000000"
 external_devices:
   - type: W25Q128
     bus: QSPI
