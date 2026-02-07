@@ -56,8 +56,14 @@ master_doc = 'index'
 
 html_theme = 'furo'
 html_static_path = ['_static']
-html_logo = '_static/mcuemu_logo.png'
-html_favicon = '_static/favicon.ico'
+
+# Logo and favicon (optional, only if files exist)
+_logo = os.path.join(os.path.dirname(__file__), '_static', 'mcuemu_logo.png')
+_favicon = os.path.join(os.path.dirname(__file__), '_static', 'favicon.ico')
+if os.path.exists(_logo):
+    html_logo = '_static/mcuemu_logo.png'
+if os.path.exists(_favicon):
+    html_favicon = '_static/favicon.ico'
 
 html_theme_options = {
     "light_css_variables": {

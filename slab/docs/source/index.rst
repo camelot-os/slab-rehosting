@@ -50,7 +50,11 @@ Documentation
    :maxdepth: 2
    :caption: Tutorials
 
+   tutorials/svd_to_peripheral
+   tutorials/creating_boards
    tutorials/stubbing_peripherals
+   tutorials/mmio_tracing
+   tutorials/ci_testing
    tutorials/creating_ui_peripherals
    tutorials/debugging_bootloops
    tutorials/trustzone_emulation
