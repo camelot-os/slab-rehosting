@@ -33,6 +33,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "slab" / "python"))
 
 from slab_cortex_m.base_server import BasePeripheralServer, STATUS_OK
+from slab_cortex_m.mmio_tracer import MMIOTracer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +60,7 @@ class TestCase:
     timeout: int = 8
     expect_mmio: int = 10  # Minimum MMIO ops to consider "alive"
     known_issue: str = ""  # Non-empty = expected failure, skip pass/fail
+    qemu_extra: dict = field(default_factory=dict)  # Extra -M props (flash-base etc)
 
 
 @dataclass
@@ -70,6 +72,9 @@ class TestResult:
     qemu_exit: int = -1
     error: str = ""
     qemu_stderr: str = ""
+    device_transactions: int = 0
+    uart_output: str = ""
+    tracer: Optional[MMIOTracer] = None
 
 
 # =============================================================================
@@ -195,15 +200,22 @@ async def run_one_test(tc: TestCase) -> TestResult:
         result.duration = time.time() - start
         return result
 
+    # Attach MMIO tracer
+    tracer = MMIOTracer()
+    server.tracer = tracer
+
     # Start TCP server
     server.running = True
     tcp_server = await asyncio.start_server(
         server.handle_client, '127.0.0.1', port, reuse_address=True)
 
     # Build QEMU command
+    machine_opts = f'slab-cortex-m,cpu-type={tc.cpu},tcp-port={port}'
+    for key, val in tc.qemu_extra.items():
+        machine_opts += f',{key}={val}'
     qemu_cmd = [
         str(QEMU_BIN),
-        '-M', f'slab-cortex-m,cpu-type={tc.cpu},tcp-port={port}',
+        '-M', machine_opts,
         '-kernel', str(fw_path),
         '-nographic', '-monitor', 'none',
     ]
@@ -244,6 +256,20 @@ async def run_one_test(tc: TestCase) -> TestResult:
     # Collect results
     result.mmio_count = getattr(server, 'mmio_count', 0)
     result.duration = time.time() - start
+    result.tracer = tracer
+
+    # Collect device transaction data for board-mode tests
+    if tc.mode == "board" and hasattr(server, 'board'):
+        board = server.board
+        # Count external device transactions
+        txn_count = 0
+        for dev in board.external_devices:
+            if hasattr(dev, '_transactions'):
+                txn_count += len(dev._transactions)
+        result.device_transactions = txn_count
+        # Capture UART output
+        if board.uart_output:
+            result.uart_output = board.uart_output.decode('ascii', errors='replace')
 
     # Determine pass/fail
     if tc.known_issue:
@@ -384,6 +410,15 @@ def build_test_cases() -> List[TestCase]:
         timeout=6, expect_mmio=3,
     ))
 
+    # -- STM32F439 WooKey board --
+    tests.append(TestCase(
+        name="STM32F439 Crypto CDC [WooKey]",
+        firmware="slab/examples/cortex-m/stm32/f439/usb/crypto_cdc/stm32_crypto_cdc.bin",
+        cpu="cortex-m4", mode="board",
+        board_yaml="slab/boards/stm32f439_wookey.yaml",
+        timeout=6, expect_mmio=10,
+    ))
+
     # -- STM32L433 (direct mode with L4xx peripherals) --
     tests.append(TestCase(
         name="STM32L433 I2C EEPROM [direct]",
@@ -413,38 +448,42 @@ def build_test_cases() -> List[TestCase]:
             timeout=5, expect_mmio=1,
         ))
 
-    # -- nRF52840 (needs flash at 0x00000000, QEMU loads to 0x08000000) --
-    for name, fw in [
-        ("nRF52840 EEPROM", "slab/examples/cortex-m/nrf/nrf52840/peripherals/eeprom/nrf52840_eeprom_test.bin"),
-        ("nRF52840 Flash", "slab/examples/cortex-m/nrf/nrf52840/peripherals/flash/nrf52840_flash_test.bin"),
-        ("nRF52840 QSPI", "slab/examples/cortex-m/nrf/nrf52840/peripherals/qspi/nrf52840_qspi_test.bin"),
+    # -- nRF52840 (flash at 0x00000000) --
+    for name, fw, mmio in [
+        ("nRF52840 EEPROM", "slab/examples/cortex-m/nrf/nrf52840/peripherals/eeprom/nrf52840_eeprom_test.bin", 5),
+        ("nRF52840 Flash", "slab/examples/cortex-m/nrf/nrf52840/peripherals/flash/nrf52840_flash_test.bin", 2),
+        ("nRF52840 QSPI", "slab/examples/cortex-m/nrf/nrf52840/peripherals/qspi/nrf52840_qspi_test.bin", 5),
     ]:
         tests.append(TestCase(
             name=f"{name} [direct]",
             firmware=fw, cpu="cortex-m4", mode="direct", mcu="nRF52840",
-            timeout=6, expect_mmio=5,
-            known_issue="Missing flash-base QEMU property (needs 0x00000000)",
+            timeout=6, expect_mmio=mmio,
+            qemu_extra={"flash-base": "0x00000000"},
         ))
 
-    # -- RP2040 (needs flash at 0x10000000, QEMU loads to 0x08000000) --
+    # -- RP2040 (flash at 0x10000000) --
     tests.append(TestCase(
         name="RP2040 EEPROM [direct]",
         firmware="slab/examples/cortex-m/rp2040/peripherals/eeprom/rp2040_eeprom_test.bin",
         cpu="cortex-m0", mode="direct", mcu="RP2040",
         timeout=6, expect_mmio=5,
-        known_issue="Missing flash-base QEMU property (needs 0x10000000)",
+        qemu_extra={"flash-base": "0x10000000"},
     ))
 
-    # -- STM32H563 TZ (needs flash at 0x0C000000) --
+    # -- STM32H563 TZ (flash at 0x0C000000) --
     tests.append(TestCase(
         name="STM32H563 TZ Secure [direct]",
         firmware="slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin",
         cpu="cortex-m33", mode="direct", mcu="STM32H563",
         timeout=6, expect_mmio=5,
-        known_issue="Missing flash-base QEMU property (needs 0x0C000000)",
+        qemu_extra={"flash-base": "0x0C000000", "sram-base": "0x30000000", "sram-size": "0x50000"},
     ))
 
     return tests
+
+
+# Expose for import by generate_reports.py
+ALL_TESTS = build_test_cases()
 
 
 # =============================================================================
@@ -488,14 +527,18 @@ async def main():
         result = await run_one_test(tc)
         results.append(result)
 
+        txn_info = ""
+        if result.device_transactions > 0:
+            txn_info = f", {result.device_transactions} txns"
+
         if tc.known_issue:
-            print(f"XFAIL ({tc.known_issue}, {result.mmio_count} MMIO, "
+            print(f"XFAIL ({tc.known_issue}, {result.mmio_count} MMIO{txn_info}, "
                   f"exit={result.qemu_exit}, {result.duration:.1f}s)")
         elif result.passed:
-            print(f"PASS ({result.mmio_count} MMIO, {result.duration:.1f}s)")
+            print(f"PASS ({result.mmio_count} MMIO{txn_info}, {result.duration:.1f}s)")
         else:
             print(f"FAIL ({result.error}, exit={result.qemu_exit}, "
-                  f"{result.mmio_count} MMIO, {result.duration:.1f}s)")
+                  f"{result.mmio_count} MMIO{txn_info}, {result.duration:.1f}s)")
             if result.qemu_stderr:
                 for line in result.qemu_stderr.strip().split('\n')[:2]:
                     print(f"         stderr: {line.strip()}")
@@ -540,6 +583,7 @@ async def main():
                 'name': r.name,
                 'passed': r.passed,
                 'mmio_count': r.mmio_count,
+                'device_transactions': r.device_transactions,
                 'duration': round(r.duration, 2),
                 'qemu_exit': r.qemu_exit,
                 'error': r.error,
