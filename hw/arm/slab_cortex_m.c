@@ -746,23 +746,29 @@ static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s)
 /*
  * SHM IRQ polling timer callback.
  *
- * Runs every 100us in the QEMU main loop to check the SHM IRQ bitmap
- * for changes and deliver pending IRQs to the NVIC.  Without this,
- * IRQs would only be checked during peripheral transactions, causing
- * interrupt-driven firmware (e.g. UART TX) to hang between accesses.
+ * Adaptive interval:
+ *   - 10us when CPU is halted (WFI) -- CPU is idle, minimal overhead
+ *   - 100us when CPU is running -- IRQs already checked on each MMIO
+ *     access via slab_proxy_shm_check_irqs(), timer is just a safety net
  */
-#define SHM_IRQ_POLL_US 100  /* 100 microseconds */
+#define SHM_IRQ_POLL_US      100  /* Running: 100 microseconds */
+#define SHM_IRQ_POLL_WFI_US  10   /* Halted (WFI): 10 microseconds */
 
 static void slab_proxy_shm_irq_timer(void *opaque)
 {
     SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
+    int64_t interval_us;
 
     slab_proxy_shm_check_irqs(s);
 
-    /* Reschedule */
+    /* When CPU is in WFI, poll aggressively for low wake-up latency.
+     * The CPU is sleeping so there's no instruction waste. */
+    interval_us = (first_cpu && first_cpu->halted)
+                  ? SHM_IRQ_POLL_WFI_US : SHM_IRQ_POLL_US;
+
     timer_mod_ns(s->shm_irq_timer,
                  qemu_clock_get_ns(QEMU_CLOCK_REALTIME)
-                 + (int64_t)SHM_IRQ_POLL_US * 1000);
+                 + interval_us * 1000);
 }
 
 /*
