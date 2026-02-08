@@ -46,7 +46,7 @@ sys.path.insert(0, str(PROJECT_DIR / "python"))
 from slab_stm32 import STM32H563PeripheralSet
 
 # Paths
-QEMU_BIN = PROJECT_DIR / "qemu" / "build" / "qemu-system-arm"
+QEMU_BIN = PROJECT_DIR / "build" / "qemu-system-arm"
 SECURE_FW = SCRIPT_DIR / "stm32h563_tz_cdc" / "build" / "secure_fw.bin"
 NONSECURE_FW = SCRIPT_DIR / "stm32h563_tz_cdc" / "build" / "nonsecure_fw.bin"
 
@@ -245,11 +245,25 @@ def run_qemu(secure_fw: Path, nonsecure_fw: Path, port: int, timeout: int) -> su
     # - trustzone=on: Enable ARMv8-M TrustZone (required for H5 secure firmware)
     cmd = [
         str(QEMU_BIN),
-        "-M", f"slab-cortex-m,flash-base=0x{SECURE_FLASH_BASE:08X},sram-base=0x{SECURE_SRAM_BASE:08X},trustzone=on",
-        "-cpu", "cortex-m33",
-        "-nographic",
+        "-M", (f"slab-cortex-m"
+               f",cpu-type=cortex-m33"
+               f",tcp-port={port}"
+               f",flash-base=0x{SECURE_FLASH_BASE:08X}"
+               f",sram-base=0x{SECURE_SRAM_BASE:08X}"
+               f",sram-size=0x{SECURE_SRAM_SIZE:X}"
+               f",trustzone=on"
+               f",sysclk-hz=250000000"
+               f",ns-flash-base=0x08040000"
+               f",ns-flash-size=0x1C0000"),
+        "-nographic", "-monitor", "none",
         "-kernel", str(secure_fw),
     ]
+
+    # Load non-secure firmware into NS flash region
+    if nonsecure_fw and nonsecure_fw.exists():
+        cmd.extend([
+            "-device", f"loader,file={nonsecure_fw},addr=0x{NS_FLASH_BASE:08X},force-raw=on",
+        ])
 
     log.info(f"Starting QEMU: {' '.join(cmd[:10])}...")
     log.debug(f"Full command: {' '.join(cmd)}")

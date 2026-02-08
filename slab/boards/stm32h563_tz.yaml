@@ -5,6 +5,10 @@ qemu_extra:
   flash-base: "0x0C000000"
   sram-base: "0x30000000"
   sram-size: "0x50000"
+  trustzone: "on"
+  sysclk-hz: "250000000"
+  ns-flash-base: "0x08040000"
+  ns-flash-size: "0x1C0000"
 external_devices:
   - type: LED
     bus: GPIOA
