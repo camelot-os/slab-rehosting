@@ -326,16 +326,39 @@ class STM32GPIOv2(STM32Peripheral):
         self.on_pin_change: Optional[Callable[[int, int, int], None]] = None
 
     def _set_port_defaults(self):
-        """Set port-specific default values."""
+        """Set port-specific default values per family."""
+        if self.family == "H5":
+            self._set_port_defaults_h5()
+        else:
+            self._set_port_defaults_f4()
+
+    def _set_port_defaults_f4(self):
+        """F4/L4 GPIO reset values (RM0090/RM0351)."""
         if self.port == 'A':
             # PA13/14/15 are debug pins (JTAG/SWD)
-            self.moder = 0xA8000000  # PA13-15 AF, others analog
+            self.moder = 0xA8000000  # PA13-15 AF, others input
             self.pupdr = 0x64000000  # PA13 pull-up, PA14/15 pull-down
-            self.ospeedr = 0x0C000000  # PA13-15 high speed
+            self.ospeedr = 0x0C000000  # PA13 very high speed
         elif self.port == 'B':
             # PB3/4 are debug pins
             self.moder = 0x00000280  # PB3/4 AF
             self.pupdr = 0x00000100  # PB4 pull-up
+
+    def _set_port_defaults_h5(self):
+        """H5 GPIO reset values (RM0481).
+        H5 defaults unassigned pins to analog mode (0b11)."""
+        if self.port == 'A':
+            # PA13/14/15 = AF (SWD), rest analog
+            self.moder = 0xABFFFFFF
+            self.pupdr = 0x64000000  # PA13 pull-up, PA14/15 pull-down
+            self.ospeedr = 0x0C000000  # PA13 very high speed
+        elif self.port == 'B':
+            # PB3 = AF (SWO), rest analog
+            self.moder = 0xFFFFFEBF  # PB3 AF (bits 7:6=10), rest analog
+            self.pupdr = 0x00000000
+        else:
+            # All other ports: all pins analog
+            self.moder = 0xFFFFFFFF
 
     def _read_reg(self, offset: int, size: int) -> int:
         if offset == self.MODER:

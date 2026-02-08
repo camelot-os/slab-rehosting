@@ -425,6 +425,15 @@ class STM32FLASHv3(STM32Peripheral):
         super().__init__("FLASH", base, 0x400)
         self.family = family
 
+        # H5 uses different register offsets (RM0481)
+        if family == "H5":
+            self.KEYR = 0x04      # NSKEYR
+            self.OPTKEYR = 0x0C
+            self.SR = 0x20        # NSSR
+            self.CR = 0x28        # NSCR
+            self.ECCR = 0x30
+            self.OPTR = 0x40
+
         self.acr = 0
         self.sr = 0
         self.cr = self.CR_LOCK | self.CR_OPTLOCK
@@ -434,8 +443,8 @@ class STM32FLASHv3(STM32Peripheral):
         # Page/sector configuration
         if family == "L4":
             self.page_size = 2048
-        elif family == "H7":
-            self.page_size = 128 * 1024  # 128KB sectors
+        elif family in ("H7", "H5"):
+            self.page_size = 128 * 1024  # 128KB sectors (H5: 8KB but simplified)
         else:  # U5
             self.page_size = 8192
 

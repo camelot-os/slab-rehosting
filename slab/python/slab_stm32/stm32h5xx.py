@@ -80,7 +80,7 @@ class STM32H5xxPeripheralSet(STM32PeripheralSet):
         self.add_peripheral(self.rcc)
         self.pwr = STM32PWRv2(base=0x44020800, family="H5")
         self.add_peripheral(self.pwr)
-        self.flash = STM32FLASHv3(base=0x40022000)
+        self.flash = STM32FLASHv3(base=0x40022000, family="H5")
         self.add_peripheral(self.flash)
 
     def _create_dma(self):
@@ -104,9 +104,9 @@ class STM32H5xxPeripheralSet(STM32PeripheralSet):
         }
         self.gpio = {}
         for port, base in gpio_bases.items():
-            self.gpio[port] = STM32GPIOv2(port=port, base=base)
+            self.gpio[port] = STM32GPIOv2(port=port, base=base, family="H5")
             self.add_peripheral(self.gpio[port])
-        self.exti = STM32EXTI(base=0x40013C00)
+        self.exti = STM32EXTI(base=0x44022000)
         self.add_peripheral(self.exti)
 
     def _create_communication(self):
@@ -190,7 +190,7 @@ class STM32H5xxPeripheralSet(STM32PeripheralSet):
         self.wwdg = STM32WWDG(base=0x40002C00)
         self.add_peripheral(self.wwdg)
         # ICACHE - HAL_Init() enables this during startup
-        self.icache = STM32ICACHE(base=0x40030000)
+        self.icache = STM32ICACHE(base=0x40030400)
         self.add_peripheral(self.icache)
         # SYSCFG - System configuration controller
         self.syscfg = STM32SYSCFG(base=0x44000400, family="H5")

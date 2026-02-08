@@ -168,9 +168,11 @@ class STM32PeripheralSet:
         """Read from peripheral address."""
         p = self.find_peripheral(addr)
         if p:
-            # Convert secure alias to non-secure for peripheral access
-            ns_addr = self._to_nonsecure(addr)
-            return p.read(ns_addr, size)
+            # Only de-alias if peripheral doesn't directly contain the address
+            # (i.e., it was found via the 0x5x->0x4x secure alias mapping)
+            if not p.contains(addr):
+                addr = self._to_nonsecure(addr)
+            return p.read(addr, size)
         self.log.debug(f"Read from unmapped address 0x{addr:08X}")
         return (0, STATUS_OK)
 
@@ -178,9 +180,10 @@ class STM32PeripheralSet:
         """Write to peripheral address."""
         p = self.find_peripheral(addr)
         if p:
-            # Convert secure alias to non-secure for peripheral access
-            ns_addr = self._to_nonsecure(addr)
-            return p.write(ns_addr, size, value)
+            # Only de-alias if peripheral doesn't directly contain the address
+            if not p.contains(addr):
+                addr = self._to_nonsecure(addr)
+            return p.write(addr, size, value)
         self.log.debug(f"Write to unmapped address 0x{addr:08X} = 0x{value:X}")
         return STATUS_OK
 

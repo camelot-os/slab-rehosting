@@ -384,21 +384,295 @@ class STM32RCCv2(STM32RCCBase):
 
 
 class STM32RCCv3(STM32RCCBase):
-    """STM32L4xx RCC - Similar to F4 but with different clock sources."""
+    """
+    STM32L4xx/WBxx RCC.
+
+    Register layout per RM0434 (WB55) / RM0351 (L4xx).
+    Used for L4xx, U5xx, and WBxx families which share similar RCC architecture.
+
+    Auto-ready logic: when firmware enables a clock (MSION, HSION, PLLON etc.),
+    the corresponding RDY bit is returned immediately on read.
+    """
+
+    # Register offsets
+    CR = 0x00
+    ICSCR = 0x04
+    CFGR = 0x08
+    PLLCFGR = 0x0C
+    PLLSAI1CFGR = 0x10
+    CIER = 0x18
+    CIFR = 0x1C
+    CICR = 0x20
+    AHB1RSTR = 0x28
+    AHB2RSTR = 0x2C
+    AHB3RSTR = 0x30
+    APB1RSTR1 = 0x38
+    APB1RSTR2 = 0x3C
+    APB2RSTR = 0x40
+    AHB1ENR = 0x48
+    AHB2ENR = 0x4C
+    AHB3ENR = 0x50
+    APB1ENR1 = 0x58
+    APB1ENR2 = 0x5C
+    APB2ENR = 0x60
+    CCIPR = 0x88
+    BDCR = 0x90
+    CSR = 0x94
+    CRRCR = 0x98
+    HSECR = 0x9C
+    EXTCFGR = 0x108
+
+    # CR bits
+    CR_MSION = 1 << 0
+    CR_MSIRDY = 1 << 1
+    CR_HSION = 1 << 8
+    CR_HSIRDY = 1 << 10
+    CR_HSIKERDY = 1 << 12
+    CR_HSEON = 1 << 16
+    CR_HSERDY = 1 << 17
+    CR_PLLON = 1 << 24
+    CR_PLLRDY = 1 << 25
+    CR_PLLSAI1ON = 1 << 26
+    CR_PLLSAI1RDY = 1 << 27
+
+    # CRRCR bits
+    CRRCR_HSI48ON = 1 << 0
+    CRRCR_HSI48RDY = 1 << 1
+
+    # CSR bits
+    CSR_LSION = 1 << 0
+    CSR_LSIRDY = 1 << 1
+
+    # BDCR bits
+    BDCR_LSEON = 1 << 0
+    BDCR_LSERDY = 1 << 1
 
     def __init__(self, base: int = 0x40021000):
         super().__init__("RCC", base)
-        self.msi_freq = 4_000_000  # MSI default
+        self.msi_freq = 4_000_000   # MSI default 4MHz (range 6)
         self.hsi_freq = 16_000_000
 
-        self.cr = 0x00000063  # MSI on and ready
-        self.cfgr = 0
+        # CR: MSI on and ready, MSIRANGE=0110 (4MHz) -- RM0434 reset=0x00000061
+        self.cr = 0x00000063
+        self.icscr = 0x00400000
+        self.cfgr = 0x00070000       # RM0434: MCOSEL=111 at reset
+        self.pllcfgr = 0x22041000    # RM0434: default PLL config
+        self.pllsai1cfgr = 0x22041000
+        self.cier = 0
+        self.cifr = 0
+        self.ahb1enr = 0
+        self.ahb2enr = 0
+        self.ahb3enr = 0
+        self.apb1enr1 = 0
+        self.apb1enr2 = 0
+        self.apb2enr = 0
+        self.ccipr = 0
+        self.bdcr = 0
+        self.csr = self.CSR_LSION | self.CSR_LSIRDY
+        self.crrcr = 0
+        self.hsecr = 0
+        self.extcfgr = 0
 
     def _read_reg(self, offset: int, size: int) -> int:
+        if offset == self.CR:
+            return self._get_cr()
+        elif offset == self.ICSCR:
+            return self.icscr
+        elif offset == self.CFGR:
+            return self._get_cfgr()
+        elif offset == self.PLLCFGR:
+            return self.pllcfgr
+        elif offset == self.PLLSAI1CFGR:
+            return self.pllsai1cfgr
+        elif offset == self.CIER:
+            return self.cier
+        elif offset == self.CIFR:
+            return self.cifr
+        elif offset == self.AHB1ENR:
+            return self.ahb1enr
+        elif offset == self.AHB2ENR:
+            return self.ahb2enr
+        elif offset == self.AHB3ENR:
+            return self.ahb3enr
+        elif offset == self.APB1ENR1:
+            return self.apb1enr1
+        elif offset == self.APB1ENR2:
+            return self.apb1enr2
+        elif offset == self.APB2ENR:
+            return self.apb2enr
+        elif offset == self.CCIPR:
+            return self.ccipr
+        elif offset == self.BDCR:
+            return self._get_bdcr()
+        elif offset == self.CSR:
+            return self._get_csr()
+        elif offset == self.CRRCR:
+            return self._get_crrcr()
+        elif offset == self.HSECR:
+            return self.hsecr
+        elif offset == self.EXTCFGR:
+            return self._get_extcfgr()
         return self.regs.get(offset, 0)
 
     def _write_reg(self, offset: int, size: int, value: int):
-        self.regs[offset] = value
+        if offset == self.CR:
+            self.cr = value
+        elif offset == self.ICSCR:
+            self.icscr = value
+        elif offset == self.CFGR:
+            self.cfgr = value
+            self._update_clocks()
+        elif offset == self.PLLCFGR:
+            self.pllcfgr = value
+        elif offset == self.PLLSAI1CFGR:
+            self.pllsai1cfgr = value
+        elif offset == self.CIER:
+            self.cier = value
+        elif offset == self.CICR:
+            self.cifr &= ~value  # Clear interrupt flags
+        elif offset == self.AHB1ENR:
+            self.ahb1enr = value
+        elif offset == self.AHB2ENR:
+            self.ahb2enr = value
+        elif offset == self.AHB3ENR:
+            self.ahb3enr = value
+        elif offset == self.APB1ENR1:
+            self.apb1enr1 = value
+        elif offset == self.APB1ENR2:
+            self.apb1enr2 = value
+        elif offset == self.APB2ENR:
+            self.apb2enr = value
+        elif offset == self.CCIPR:
+            self.ccipr = value
+        elif offset == self.BDCR:
+            self.bdcr = value
+        elif offset == self.CSR:
+            if value & (1 << 23):  # RMVF - clear reset flags
+                self.csr &= 0x00FFFFFF
+            else:
+                self.csr = value
+        elif offset == self.CRRCR:
+            self.crrcr = value
+        elif offset == self.HSECR:
+            self.hsecr = value
+        elif offset == self.EXTCFGR:
+            self.extcfgr = value
+        else:
+            self.regs[offset] = value
+
+    def _get_cr(self) -> int:
+        """Read CR with auto-ready bits."""
+        cr = self.cr
+        if cr & self.CR_MSION:
+            cr |= self.CR_MSIRDY
+        if cr & self.CR_HSION:
+            cr |= self.CR_HSIRDY | self.CR_HSIKERDY
+        if cr & self.CR_HSEON:
+            cr |= self.CR_HSERDY
+        if cr & self.CR_PLLON:
+            cr |= self.CR_PLLRDY
+        if cr & self.CR_PLLSAI1ON:
+            cr |= self.CR_PLLSAI1RDY
+        return cr
+
+    def _get_cfgr(self) -> int:
+        """Read CFGR with prescaler-ready flags.
+
+        Per RM0434: HPREF (bit 16), PPRE1F (bit 17), PPRE2F (bit 18) are
+        read-only status bits indicating prescaler change has taken effect.
+        In emulation, prescaler changes are instant so these are always set.
+        """
+        cfgr = self.cfgr
+        # Always set prescaler-ready flags (instant in emulation)
+        cfgr |= (1 << 16) | (1 << 17) | (1 << 18)
+        return cfgr
+
+    def _get_bdcr(self) -> int:
+        """Read BDCR with LSE auto-ready."""
+        bdcr = self.bdcr
+        if bdcr & self.BDCR_LSEON:
+            bdcr |= self.BDCR_LSERDY
+        return bdcr
+
+    def _get_csr(self) -> int:
+        """Read CSR with LSI auto-ready."""
+        csr = self.csr
+        if csr & self.CSR_LSION:
+            csr |= self.CSR_LSIRDY
+        return csr
+
+    def _get_crrcr(self) -> int:
+        """Read CRRCR with HSI48 auto-ready."""
+        crrcr = self.crrcr
+        if crrcr & self.CRRCR_HSI48ON:
+            crrcr |= self.CRRCR_HSI48RDY
+        return crrcr
+
+    def _get_extcfgr(self) -> int:
+        """Read EXTCFGR with prescaler ready flags.
+
+        Per CMSIS stm32wb35xx.h / stm32wb55xx.h:
+          SHDHPRE[3:0]  = bits [3:0]   (Shared AHB prescaler)
+          C2HPRE[3:0]   = bits [7:4]   (CPU2 AHB prescaler)
+          SHDHPREF       = bit 16       (Shared prescaler applied, read-only)
+          C2HPREF        = bit 17       (CPU2 prescaler applied, read-only)
+          RFCSS          = bit 20       (RF clock source selection)
+        """
+        val = self.extcfgr
+        # Always set prescaler-ready flags (instant in emulation)
+        val |= (1 << 16) | (1 << 17)
+        return val
+
+    def _update_clocks(self):
+        """Update clock frequencies and SWS based on CFGR."""
+        sw = self.cfgr & 0x3
+
+        if sw == 0:
+            self.sysclk = self.msi_freq
+        elif sw == 1:
+            self.sysclk = self.hsi_freq
+        elif sw == 2:
+            self.sysclk = self.hse_freq
+        elif sw == 3:
+            # PLL: VCO = (src / PLLM) * PLLN, SYSCLK = VCO / PLLR
+            pllm = ((self.pllcfgr >> 4) & 0x7) + 1
+            plln = (self.pllcfgr >> 8) & 0x7F
+            pllr = (((self.pllcfgr >> 25) & 0x3) + 1) * 2
+            pllsrc = self.pllcfgr & 0x3
+            if pllsrc == 1:
+                vco_in = self.msi_freq // pllm
+            elif pllsrc == 2:
+                vco_in = self.hsi_freq // pllm
+            elif pllsrc == 3:
+                vco_in = self.hse_freq // pllm
+            else:
+                vco_in = 0
+            if vco_in > 0 and plln > 0 and pllr > 0:
+                self.sysclk = (vco_in * plln) // pllr
+
+        # Auto-update SWS to match SW
+        self.cfgr = (self.cfgr & ~0x0C) | (sw << 2)
+
+        # AHB prescaler
+        hpre = (self.cfgr >> 4) & 0xF
+        if hpre < 8:
+            self.hclk = self.sysclk
+        else:
+            self.hclk = self.sysclk >> (hpre - 7)
+
+        # APB1 prescaler
+        ppre1 = (self.cfgr >> 8) & 0x7
+        if ppre1 < 4:
+            self.pclk1 = self.hclk
+        else:
+            self.pclk1 = self.hclk >> (ppre1 - 3)
+
+        # APB2 prescaler
+        ppre2 = (self.cfgr >> 11) & 0x7
+        if ppre2 < 4:
+            self.pclk2 = self.hclk
+        else:
+            self.pclk2 = self.hclk >> (ppre2 - 3)
 
 
 class STM32RCCv4(STM32RCCBase):
@@ -437,8 +711,8 @@ class STM32RCCv4(STM32RCCBase):
     APB3ENR = 0xA8      # APB3 clock enable
     CCIPR4 = 0xE4       # Clock source for SysTick, other peripherals
     CCIPR5 = 0xE8       # Additional clock config
-    BDCR = 0x70         # Backup domain control (LSE)
-    CSR = 0x8C          # Clock status register (LSI)
+    BDCR = 0xF0         # Backup domain control (LSE) -- RM0481
+    CSR = 0xF4          # Clock status register (LSI) -- RM0481
 
     # CR bits (from STM32H563 SVD)
     CR_HSION = 1 << 0       # HSI enable
