@@ -57,3 +57,6 @@
 [submodule "slab/examples/repos/FreeRTOS-Kernel"]
 	path = slab/examples/repos/FreeRTOS-Kernel
 	url = https://github.com/FreeRTOS/FreeRTOS-Kernel.git
+[submodule "slab/examples/repos/STM32CubeWB"]
+	path = slab/examples/repos/STM32CubeWB
+	url = https://github.com/STMicroelectronics/STM32CubeWB.git

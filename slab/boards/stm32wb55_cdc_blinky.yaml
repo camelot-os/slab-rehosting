@@ -2,9 +2,9 @@ name: STM32WB55_CDC_Blinky
 mcu: STM32WB55
 clock: 64000000
 usb:
-  type: dwc2_otg_fs
-  base: 0x50000000
-  irq: 67
+  type: usb_fs_pma
+  base: 0x40006800
+  irq: 20
 external_devices:
   - type: LED
     bus: GPIOB
