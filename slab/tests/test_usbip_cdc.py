@@ -461,8 +461,8 @@ class TestUSBIPProtocol:
 
         sock.sendall(unlink)
 
-        # Server sends: 20 (header) + 4 (status) + 44 (padding) = 68 bytes
-        resp = _recv_exact(sock, 68)
+        # Server sends: 20 (header) + 4 (status) + 24 (padding) = 48 bytes
+        resp = _recv_exact(sock, 48)
         ret_cmd = struct.unpack(">I", resp[:4])[0]
         assert ret_cmd == 0x00000004  # RET_UNLINK
 

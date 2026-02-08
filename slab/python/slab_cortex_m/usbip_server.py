@@ -349,9 +349,16 @@ class USBIPServer:
         self.log = logging.getLogger('USBIP')
 
     def set_usb_peripheral(self, peripheral):
-        """Link to DWC2 peripheral for register-level injection."""
+        """Link to USB peripheral for firmware-in-the-loop injection.
+
+        The peripheral must implement: inject_vbus(), inject_usbrst(),
+        inject_enumdne(), inject_setup_packet(), wait_ep0_response(),
+        inject_out_data().
+
+        Compatible with DWC2 OTG, PMA USB FS, and RP2040 USB controllers.
+        """
         self.usb_peripheral = peripheral
-        self.log.info("Linked to USB peripheral for DWC2 injection")
+        self.log.info(f"Linked to USB peripheral: {type(peripheral).__name__}")
 
     async def handle_client(self, reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter):
@@ -434,40 +441,45 @@ class USBIPServer:
 
     async def handle_import(self, reader: asyncio.StreamReader,
                            writer: asyncio.StreamWriter) -> bool:
-        """Handle OP_REQ_IMPORT - attach device. Returns True if successful."""
+        """Handle OP_REQ_IMPORT - attach device. Returns True if successful.
+
+        IMPORTANT: The USB connection sequence (VBUS/USBRST/ENUMDNE) is injected
+        BEFORE sending the OP_REP_IMPORT response. This ensures the firmware has
+        fully initialized its USB stack before the host starts sending URBs.
+        The usbip client blocks on recv() until we respond, so no URBs can arrive
+        during the inject sequence.
+        """
         # Read busid (exactly 32 bytes in USBIP protocol)
         busid_data = await reader.readexactly(32)
         busid = busid_data.rstrip(b'\x00').decode('utf-8')
         self.log.info(f"OP_REQ_IMPORT: {busid}")
 
-        success = False
-        if busid == self.device_info.busid:
-            # Success response
-            response = struct.pack('>HHI',
-                USBIP_VERSION,
-                USBIPCommand.OP_REP_IMPORT,
-                USBIPStatus.ST_OK
-            )
-            response += self.device_info.pack_device_info()
-            self.imported = True
-            success = True
-            self.log.info("Device imported successfully")
-        else:
+        if busid != self.device_info.busid:
             # Device not found
             response = struct.pack('>HHI',
                 USBIP_VERSION,
                 USBIPCommand.OP_REP_IMPORT,
                 USBIPStatus.ST_NODEV
             )
+            writer.write(response)
+            await writer.drain()
             self.log.warning(f"Device not found: {busid}")
+            return False
 
-        writer.write(response)
-        await writer.drain()
+        # Inject USB connection sequence into peripheral BEFORE responding.
+        # The usbip client is blocking on recv(), so no URBs will arrive yet.
+        if self.usb_peripheral:
+            # Wait for firmware to initialize USB (poll is_ready if available)
+            if hasattr(self.usb_peripheral, 'is_ready'):
+                self.log.info("Waiting for firmware USB initialization...")
+                for _ in range(100):  # Up to 10 seconds
+                    if self.usb_peripheral.is_ready():
+                        break
+                    await asyncio.sleep(0.1)
+                else:
+                    self.log.warning("Firmware USB init timeout -- proceeding anyway")
+                self.log.info("Firmware USB initialized")
 
-        # Inject USB connection sequence into DWC2 peripheral
-        # Each step needs enough time for firmware to process via proxy
-        # (each register access = TCP round-trip ~0.1-1ms, ~20 accesses per step)
-        if success and self.usb_peripheral:
             # 1. Assert VBUS (cable plugged in)
             self.usb_peripheral.inject_vbus(connected=True)
             self.log.info("Waiting for firmware to detect VBUS...")
@@ -475,13 +487,36 @@ class USBIPServer:
             # 2. Bus reset (host resets device)
             self.usb_peripheral.inject_usbrst()
             self.log.info("Waiting for firmware to process USBRST...")
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
             # 3. Enumeration done (speed negotiation complete)
             self.usb_peripheral.inject_enumdne()
             self.log.info("Waiting for firmware to process ENUMDNE...")
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(0.5)
 
-        return success
+            # 4. Wait for firmware to be ready again after reset sequence
+            if hasattr(self.usb_peripheral, 'is_ready'):
+                for _ in range(50):  # Up to 5 seconds
+                    if self.usb_peripheral.is_ready():
+                        break
+                    await asyncio.sleep(0.1)
+                else:
+                    self.log.warning("Firmware post-reset init timeout")
+
+            self.log.info("Firmware USB init complete, sending import response")
+
+        # NOW send the import response - firmware is ready for URBs
+        response = struct.pack('>HHI',
+            USBIP_VERSION,
+            USBIPCommand.OP_REP_IMPORT,
+            USBIPStatus.ST_OK
+        )
+        response += self.device_info.pack_device_info()
+        writer.write(response)
+        await writer.drain()
+
+        self.imported = True
+        self.log.info("Device imported successfully")
+        return True
 
     def _decode_setup(self, setup: bytes) -> str:
         """Decode USB SETUP packet into human-readable string."""
@@ -649,14 +684,14 @@ class USBIPServer:
         seqnum_to_unlink = struct.unpack('>I', unlink_data[20:24])[0]
         self.log.info(f"UNLINK: seqnum={seqnum} unlink_seqnum={seqnum_to_unlink}")
 
-        # Send unlink response
+        # Send unlink response (48 bytes total: basic(20) + status(4) + padding(24))
         response = struct.pack('>IIIII',
             USBIPCommand.USBIP_RET_UNLINK,
             seqnum,
             0, 0, 0  # devid, direction, ep
         )
         response += struct.pack('>i', -104)  # -ECONNRESET
-        response += bytes(44)  # padding
+        response += bytes(24)  # padding to reach 48 bytes total
 
         writer.write(response)
         await writer.drain()

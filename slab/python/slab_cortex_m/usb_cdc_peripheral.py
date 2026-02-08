@@ -740,6 +740,20 @@ class USBCDCPeripheral:
                      f"wVal=0x{setup_data[2]|setup_data[3]<<8:04X} wLen={wLength})")
         self.trigger_irq()
 
+    def is_ready(self) -> bool:
+        """Check if firmware has completed DWC2 USB initialization.
+
+        Returns True when GCCFG has been configured (transceiver enabled)
+        and device interrupts are enabled.
+        """
+        gccfg = self.regs.get(self.GCCFG, 0)
+        gintmsk = self.regs.get(self.GINTMSK, 0)
+        gahbcfg = self.regs.get(self.GAHBCFG, 0)
+        # GCCFG non-zero = USB transceiver configured
+        # GAHBCFG bit 0 = GINTMSK (global interrupt mask)
+        # GINTMSK non-zero = at least some interrupts enabled
+        return gccfg != 0 and (gahbcfg & 1) and gintmsk != 0
+
     def inject_vbus(self, connected: bool = True):
         """Inject VBUS state change.
 

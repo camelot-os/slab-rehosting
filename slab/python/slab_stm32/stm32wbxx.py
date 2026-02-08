@@ -371,6 +371,7 @@ class STM32WBxxPeripheralSet(STM32PeripheralSet):
         self._create_clock_system()
         self._create_gpio()
         self._create_communication()
+        self._create_usb()
         self._create_timers()
         self._create_analog()
         self._create_dma()
@@ -408,6 +409,13 @@ class STM32WBxxPeripheralSet(STM32PeripheralSet):
 
         self.exti = STM32EXTI(base=0x58000800)
         self.add_peripheral(self.exti)
+
+    def _create_usb(self):
+        """Create USB Full-Speed device (PMA-based)."""
+        from slab_stm32.stm32_usb_device import STM32USBDevice
+        # WB55 USB at 0x40006800, PMA at 0x40006C00, USB_LP_IRQn=20
+        self.usb = STM32USBDevice(base=0x40006800, irq=20, pma_access=1)
+        self.add_peripheral(self.usb)
 
     def _create_communication(self):
         """Create USART, SPI, I2C peripherals."""

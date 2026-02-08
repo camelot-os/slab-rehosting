@@ -1564,6 +1564,14 @@ class RP2040PeripheralSet:
             self.usb = RP2040USB()  # 0x50110000
             self._peripherals['USB'] = self.usb
 
+            # USB DPRAM (endpoint buffers)
+            from slab_rp2040.rp2040_misc import RP2040USBDPRAM
+            self.usb_dpram = RP2040USBDPRAM()  # 0x50100000
+            self._peripherals['USB_DPRAM'] = self.usb_dpram
+            # Cross-link USB controller and DPRAM
+            self.usb.dpram = self.usb_dpram
+            self.usb_dpram._usb_ctrl = self.usb
+
             self.log.debug("Misc peripherals created")
 
         except ImportError as e:

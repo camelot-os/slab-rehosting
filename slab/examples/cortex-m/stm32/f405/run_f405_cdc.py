@@ -23,14 +23,13 @@ import subprocess
 from pathlib import Path
 
 # Add python path
-SCRIPT_DIR = Path(__file__).parent
+SCRIPT_DIR = Path(__file__).parent.parent
 PROJECT_DIR = SCRIPT_DIR.parent.parent.parent.parent
 sys.path.insert(0, str(PROJECT_DIR / "python"))
 
 from slab_stm32 import STM32F405PeripheralSet
-
 # Paths
-QEMU_BIN = PROJECT_DIR / "qemu" / "build" / "qemu-system-arm"
+QEMU_BIN =  PROJECT_DIR  / "build" / "qemu-system-arm"
 FIRMWARE = PROJECT_DIR / "tests" / "firmware" / "build" / "test_usb_cdc_crypto.bin"
 
 logging.basicConfig(

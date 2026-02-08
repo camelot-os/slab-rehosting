@@ -22,6 +22,7 @@ Copyright (C) 2025 TwistedWires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 
+import asyncio
 import logging
 import sys
 from pathlib import Path
@@ -129,38 +130,48 @@ class EndpointState:
 
 class STM32USBDevice(STM32Peripheral):
     """
-    STM32F1 USB Device Controller.
+    STM32 USB Device Controller (PMA-based).
 
     This peripheral provides full-speed (12 Mbps) USB device functionality.
     It uses a packet memory area (PMA) for endpoint buffers.
+    Found in STM32F0/F1/F3/L0/L4/WB families.
 
     Features:
     - 8 endpoints (EP0-EP7)
     - Double buffering support
     - Isochronous transfer support
     - Suspend/resume
+    - USBIP firmware-in-the-loop via inject methods
     """
 
-    # USB Device register base
+    # USB Device register base (default for F1; WB55 uses 0x40006800)
     USB_BASE = 0x40005C00
     USB_SIZE = 0x400
 
-    # PMA (Packet Memory Area) - 512 bytes
-    PMA_BASE = 0x40006000
-    PMA_SIZE = 0x400  # 512 bytes, but accessed as half-words
+    # PMA size (accessed as half-words on 32-bit boundaries)
+    PMA_SIZE = 0x400
 
     # Number of endpoints
     NUM_ENDPOINTS = 8
 
-    def __init__(self, base: int = USB_BASE, irq: int = 20):
+    def __init__(self, base: int = USB_BASE, irq: int = 20, pma_access: int = 2):
         """
         Initialize USB Device peripheral.
 
         Args:
-            base: Base address (default 0x40005C00)
-            irq: USB low-priority IRQ number (default 20 for STM32F103)
+            base: Base address (default 0x40005C00; WB55 uses 0x40006800)
+            irq: USB low-priority IRQ number (default 20)
+            pma_access: PMA access mode (1=16-bit aligned for WB55/G0/U5,
+                        2=32-bit aligned for F0/F1/F3/L1)
         """
         super().__init__("USB", base, self.USB_SIZE, irq)
+
+        # PMA access mode: 1=direct (16-bit words at 16-bit boundaries)
+        #                   2=legacy (16-bit words at 32-bit boundaries)
+        self.pma_access = pma_access
+
+        # PMA base is always base + 0x400 (immediately follows USB registers)
+        self.pma_base = base + 0x400
 
         # High priority IRQ for isochronous/double-buffered
         self.irq_hp = 19
@@ -168,7 +179,7 @@ class STM32USBDevice(STM32Peripheral):
         # Endpoint states
         self.endpoints: List[EndpointState] = [EndpointState() for _ in range(self.NUM_ENDPOINTS)]
 
-        # PMA memory (512 bytes, accessed as 16-bit words on 32-bit boundaries)
+        # PMA memory (accessed as 16-bit words on 32-bit boundaries)
         self.pma = bytearray(self.PMA_SIZE)
 
         # Control registers
@@ -194,7 +205,7 @@ class STM32USBDevice(STM32Peripheral):
         self.cdc_rx_buffer: bytearray = bytearray()
         self.cdc_tx_buffer: bytearray = bytearray()
 
-        # USB timing model (Full-Speed only on STM32F1)
+        # USB timing model (Full-Speed only)
         self.timing = USBTimingModel(speed=USBSpeed.FULL_SPEED)
 
         # Data toggle tracking (per-EP)
@@ -205,54 +216,81 @@ class STM32USBDevice(STM32Peripheral):
 
         # Uninitialized memory tracker for PMA
         self.pma_tracker = UninitializedMemoryTracker(
-            "PMA", base=self.PMA_BASE, size=self.PMA_SIZE
+            "PMA", base=self.pma_base, size=self.PMA_SIZE
         )
 
-        self.log.info(f"USB Device initialized at 0x{base:08X}")
+        # USBIP firmware-in-the-loop state
+        self.setup_packet = b''
+        self._ep0_expected = 0
+        self._ep0_event: Optional[asyncio.Event] = None
+        self._ep0_response = b''
+        self._ep0_accum = bytearray()
+        self._ep0_max_pkt = 64
+
+        self.log.info(f"USB Device initialized at 0x{base:08X} (PMA at 0x{self.pma_base:08X})")
 
     def contains(self, addr: int) -> bool:
         """Check if address is in USB or PMA region."""
         if self.base <= addr < self.base + self.size:
             return True
-        if self.PMA_BASE <= addr < self.PMA_BASE + self.PMA_SIZE:
+        if self.pma_base <= addr < self.pma_base + self.PMA_SIZE:
             return True
         return False
 
     def read(self, addr: int, size: int) -> Tuple[int, int]:
         """Read from USB registers or PMA."""
-        offset = addr - self.base if addr >= self.base else addr - self.PMA_BASE + 0x400
+        offset = addr - self.base if addr >= self.base else addr - self.pma_base + 0x400
         self.coverage.record_register_access(offset, is_write=False)
-        if self.PMA_BASE <= addr < self.PMA_BASE + self.PMA_SIZE:
+        if self.pma_base <= addr < self.pma_base + self.PMA_SIZE:
             return self._read_pma(addr, size)
         return super().read(addr, size)
 
     def write(self, addr: int, size: int, value: int) -> int:
         """Write to USB registers or PMA."""
-        offset = addr - self.base if addr >= self.base else addr - self.PMA_BASE + 0x400
+        offset = addr - self.base if addr >= self.base else addr - self.pma_base + 0x400
         self.coverage.record_register_access(offset, is_write=True, value=value)
-        if self.PMA_BASE <= addr < self.PMA_BASE + self.PMA_SIZE:
+        if self.pma_base <= addr < self.pma_base + self.PMA_SIZE:
             return self._write_pma(addr, size, value)
         return super().write(addr, size, value)
 
+    def _pma_offset(self, cpu_offset: int) -> int:
+        """Convert CPU address offset to PMA internal byte offset.
+
+        PMA_ACCESS=1 (WB55/G0/U5): 16-bit words at 16-bit boundaries (direct).
+        PMA_ACCESS=2 (F0/F1/F3):   16-bit words at 32-bit boundaries (packed).
+        """
+        if self.pma_access == 1:
+            return cpu_offset  # Direct: each CPU byte maps 1:1 to PMA byte
+        else:
+            return (cpu_offset // 4) * 2  # Legacy: skip upper 16 bits of each 32-bit slot
+
     def _read_pma(self, addr: int, size: int) -> Tuple[int, int]:
         """Read from Packet Memory Area."""
-        offset = addr - self.PMA_BASE
-        # PMA is accessed as 16-bit on 32-bit boundaries
-        # Only lower 16 bits of each 32-bit word are valid
-        word_offset = (offset // 4) * 2
-        if word_offset + size <= len(self.pma):
-            self.pma_tracker.check_read(self.PMA_BASE + word_offset, min(size, 2))
-            value = int.from_bytes(self.pma[word_offset:word_offset + min(size, 2)], 'little')
+        offset = addr - self.pma_base
+        pma_off = self._pma_offset(offset)
+        read_size = min(size, 2) if self.pma_access == 2 else size
+        if pma_off + read_size <= len(self.pma):
+            self.pma_tracker.check_read(self.pma_base + pma_off, read_size)
+            value = int.from_bytes(self.pma[pma_off:pma_off + read_size], 'little')
             return (value, STATUS_OK)
         return (0, STATUS_OK)
 
     def _write_pma(self, addr: int, size: int, value: int) -> int:
         """Write to Packet Memory Area."""
-        offset = addr - self.PMA_BASE
-        word_offset = (offset // 4) * 2
-        if word_offset + 2 <= len(self.pma):
-            self.pma[word_offset:word_offset + 2] = (value & 0xFFFF).to_bytes(2, 'little')
-            self.pma_tracker.record_write(self.PMA_BASE + word_offset, 2)
+        offset = addr - self.pma_base
+        pma_off = self._pma_offset(offset)
+        if self.pma_access == 1:
+            # Direct mode: write size bytes
+            write_size = min(size, len(self.pma) - pma_off) if pma_off < len(self.pma) else 0
+            if write_size > 0:
+                self.pma[pma_off:pma_off + write_size] = value.to_bytes(
+                    write_size, 'little')[:write_size]
+                self.pma_tracker.record_write(self.pma_base + pma_off, write_size)
+        else:
+            # Legacy mode: only lower 16 bits of 32-bit word
+            if pma_off + 2 <= len(self.pma):
+                self.pma[pma_off:pma_off + 2] = (value & 0xFFFF).to_bytes(2, 'little')
+                self.pma_tracker.record_write(self.pma_base + pma_off, 2)
         return STATUS_OK
 
     def _read_reg(self, offset: int, size: int) -> int:
@@ -325,6 +363,10 @@ class STM32USBDevice(STM32Peripheral):
         if state.ctr_tx:
             value |= (1 << 7)
 
+        # SETUP bit (read-only, set by hardware on SETUP packet reception)
+        if state.setup:
+            value |= (1 << 11)
+
         return value
 
     def _write_epr(self, ep: int, value: int):
@@ -379,9 +421,14 @@ class STM32USBDevice(STM32Peripheral):
         # CTR_RX (write 0 to clear)
         if not (value & (1 << 15)):
             state.ctr_rx = False
+            state.setup = False  # SETUP consumed when firmware clears CTR_RX
 
         self._epr[ep] = new
         self.log.debug(f"EP{ep}: STAT_TX={state.tx_status}, STAT_RX={state.rx_status}")
+
+        # USBIP hook: detect when firmware arms EP0 TX (STAT_TX -> VALID)
+        if ep == 0 and state.tx_status == EPStatBits.VALID and self._ep0_event:
+            self._handle_ep0_tx_ready()
 
     def _write_cntr(self, value: int):
         """Write USB_CNTR register."""
@@ -430,6 +477,12 @@ class STM32USBDevice(STM32Peripheral):
         self.connected = False
         self.address = 0
         self.suspended = False
+        # Reset USBIP state
+        self.setup_packet = b''
+        self._ep0_expected = 0
+        self._ep0_event = None
+        self._ep0_response = b''
+        self._ep0_accum = bytearray()
 
     # =========================================================================
     # USB Transaction Simulation
@@ -506,7 +559,7 @@ class STM32USBDevice(STM32Peripheral):
         state.rx_status = EPStatBits.NAK  # NAK until firmware re-enables
 
         self._istr = (self._istr & ~0x0F) | ep  # Set EP_ID
-        self._istr &= ~(1 << USBIstrBits.DIR)  # OUT direction
+        self._istr |= (1 << USBIstrBits.DIR)  # DIR=1 for OUT (host to device)
         self._istr |= (1 << USBIstrBits.CTR)
 
         if self._cntr & (1 << USBCntrBits.CTRM):
@@ -550,7 +603,7 @@ class STM32USBDevice(STM32Peripheral):
         state.tx_status = EPStatBits.NAK
 
         self._istr = (self._istr & ~0x0F) | ep
-        self._istr |= (1 << USBIstrBits.DIR)  # IN direction
+        self._istr &= ~(1 << USBIstrBits.DIR)  # DIR=0 for IN (device to host)
         self._istr |= (1 << USBIstrBits.CTR)
 
         if self._cntr & (1 << USBCntrBits.CTRM):
@@ -576,7 +629,7 @@ class STM32USBDevice(STM32Peripheral):
     def _read_pma_buffer(self, offset: int, size: int) -> bytes:
         """Read buffer from PMA."""
         if offset + size <= len(self.pma):
-            self.pma_tracker.check_read(self.PMA_BASE + offset, size)
+            self.pma_tracker.check_read(self.pma_base + offset, size)
             return bytes(self.pma[offset:offset + size])
         return b''
 
@@ -584,7 +637,164 @@ class STM32USBDevice(STM32Peripheral):
         """Write buffer to PMA."""
         if offset + len(data) <= len(self.pma):
             self.pma[offset:offset + len(data)] = data
-            self.pma_tracker.record_write(self.PMA_BASE + offset, len(data))
+            self.pma_tracker.record_write(self.pma_base + offset, len(data))
+
+    # =========================================================================
+    # USBIP Firmware-in-the-Loop Injection
+    # =========================================================================
+
+    def is_ready(self) -> bool:
+        """Check if firmware has completed USB initialization.
+
+        Returns True when: PDWN cleared, FRES cleared, CTRM enabled.
+        """
+        pdwn = bool(self._cntr & (1 << USBCntrBits.PDWN))
+        fres = bool(self._cntr & (1 << USBCntrBits.FRES))
+        ctrm = bool(self._cntr & (1 << USBCntrBits.CTRM))
+        return not pdwn and not fres and ctrm
+
+    def inject_vbus(self, connected: bool = True):
+        """Inject VBUS state change.
+
+        PMA USB has no hardware VBUS detection (unlike DWC2 OTG).
+        Just track the connected state.
+        """
+        self.connected = connected
+        self.log.info(f"VBUS {'asserted' if connected else 'deasserted'}")
+
+    def inject_usbrst(self):
+        """Inject USB bus reset. Delegates to simulate_reset()."""
+        self.simulate_reset()
+
+    def inject_enumdne(self):
+        """Inject enumeration done (no-op for PMA USB).
+
+        PMA USB has no ENUMDNE event. After bus reset, firmware enables
+        the device by setting DADDR.EF. Speed is always Full Speed.
+        """
+        self.log.debug("ENUMDNE not applicable for PMA USB (firmware sets DADDR.EF)")
+
+    def inject_setup_packet(self, setup_data: bytes):
+        """Inject a USB SETUP packet into EP0 RX path.
+
+        Writes SETUP data to EP0 RX PMA buffer (from BTABLE), sets
+        SETUP + CTR_RX in EP0R state, and triggers CTR interrupt.
+        """
+        assert len(setup_data) == 8, "SETUP packet must be 8 bytes"
+
+        # Validate BTABLE is initialized
+        if self._btable == 0 and not any(
+                self.pma[0:16]):
+            self.log.warning("BTABLE not initialized (still 0 with empty PMA) -- "
+                             "firmware may not have completed USB init")
+
+        # Read EP0 RX buffer address from BTABLE
+        btable_entry = self._btable + 4  # EP0 RX addr offset
+        rx_addr = self._read_pma_word(btable_entry)
+        self.log.debug(f"BTABLE=0x{self._btable:04x}, EP0 RX addr=0x{rx_addr:04x}")
+
+        # Write SETUP data to PMA
+        self._write_pma_buffer(rx_addr, setup_data)
+
+        # Update COUNT_RX with 8 bytes received
+        rx_count_reg = self._read_pma_word(btable_entry + 2)
+        self._write_pma_word(btable_entry + 2, (rx_count_reg & 0xFC00) | 8)
+
+        # Set EP0R: SETUP=1, CTR_RX=1, RX status -> NAK
+        state = self.endpoints[0]
+        state.setup = True
+        state.ctr_rx = True
+        state.rx_status = EPStatBits.NAK
+
+        # Set ISTR: CTR=1, DIR=1 (OUT), EP_ID=0
+        self._istr = (self._istr & ~0x001F) | (1 << USBIstrBits.DIR)
+        self._istr |= (1 << USBIstrBits.CTR)
+
+        # Track SETUP for wait_ep0_response
+        self.setup_packet = setup_data
+        self._ep0_expected = setup_data[6] | (setup_data[7] << 8)
+
+        self.log.info(f"Injected SETUP: {setup_data.hex()} wLen={self._ep0_expected}")
+        ctrm = bool(self._cntr & (1 << USBCntrBits.CTRM))
+        self.log.debug(f"CNTR=0x{self._cntr:04x} CTRM={ctrm} ISTR=0x{self._istr:04x} "
+                       f"DADDR=0x{self._daddr:02x}")
+        if ctrm:
+            self.trigger_irq()
+        else:
+            self.log.warning("CNTR.CTRM not set -- CTR interrupt will not fire!")
+
+    def _handle_ep0_tx_ready(self):
+        """EP0 TX armed by firmware -- read response from PMA, simulate IN transfer.
+
+        Called from _write_epr() hook when EP0 STAT_TX toggles to VALID
+        while wait_ep0_response() is waiting. Supports multi-packet by
+        accumulating data across XFRC events.
+        """
+        state = self.endpoints[0]
+
+        # Read TX buffer from BTABLE
+        btable_entry = self._btable
+        tx_addr = self._read_pma_word(btable_entry)
+        tx_count = self._read_pma_word(btable_entry + 2) & 0x3FF
+        pkt_data = self._read_pma_buffer(tx_addr, tx_count)
+
+        # Accumulate for multi-packet
+        self._ep0_accum.extend(pkt_data)
+        total = len(self._ep0_accum)
+        self.log.info(f"EP0 IN packet: {len(pkt_data)}B (total={total}/{self._ep0_expected})")
+
+        # Simulate IN transfer completing: CTR_TX=1, STAT_TX -> NAK
+        state.ctr_tx = True
+        state.tx_status = EPStatBits.NAK
+
+        self._istr = (self._istr & ~0x001F) | (1 << USBIstrBits.DIR)
+        self._istr |= (1 << USBIstrBits.CTR)
+        if self._cntr & (1 << USBCntrBits.CTRM):
+            self.trigger_irq()
+
+        # Check completion: short packet or enough data
+        if len(pkt_data) < self._ep0_max_pkt or total >= self._ep0_expected:
+            self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
+            self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes")
+            self._ep0_event.set()
+
+    async def wait_ep0_response(self, timeout: float = 5.0) -> bytes:
+        """Wait for firmware to complete EP0 IN transfer.
+
+        Called by USBIPServer for control IN transfers. Creates an
+        asyncio.Event and waits for _handle_ep0_tx_ready() to signal it.
+        """
+        self._ep0_event = asyncio.Event()
+        self._ep0_response = b''
+        self._ep0_accum = bytearray()
+        try:
+            await asyncio.wait_for(self._ep0_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            self.log.warning("EP0 response timeout (firmware did not respond)")
+            if self._ep0_accum:
+                self._ep0_response = bytes(self._ep0_accum)
+        finally:
+            self._ep0_event = None
+        return self._ep0_response
+
+    def inject_out_data(self, ep: int, data: bytes):
+        """Inject OUT data into an endpoint.
+
+        Used for control OUT data phase (e.g., SET_LINE_CODING) and
+        STATUS OUT ZLP after control IN transfers.
+        """
+        if len(data) == 0:
+            # ZLP -- just set CTR_RX to signal transfer complete
+            state = self.endpoints[ep]
+            state.ctr_rx = True
+            state.rx_status = EPStatBits.NAK
+            self._istr = (self._istr & ~0x0F) | ep
+            self._istr |= (1 << USBIstrBits.CTR)
+            if self._cntr & (1 << USBCntrBits.CTRM):
+                self.trigger_irq()
+        else:
+            self.send_to_endpoint(ep, data)
+        self.log.info(f"Injected OUT data EP{ep}: {len(data)} bytes")
 
     # =========================================================================
     # CDC ACM Support (Virtual COM Port)

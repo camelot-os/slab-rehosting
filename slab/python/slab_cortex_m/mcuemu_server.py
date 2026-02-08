@@ -1191,10 +1191,9 @@ class MCUemuServer(BasePeripheralServer):
         return None
 
     def _find_usb_peripheral(self):
-        """Find the USB OTG peripheral (if registered)."""
-        from slab_cortex_m.usb_cdc_peripheral import USBCDCPeripheral
+        """Find any USB peripheral with USBIP inject interface."""
         for p in self.peripherals:
-            if isinstance(p, USBCDCPeripheral):
+            if hasattr(p, 'inject_setup_packet') and hasattr(p, 'wait_ep0_response'):
                 return p
         return None
 
@@ -1277,6 +1276,14 @@ def load_config(path: str) -> dict:
             return json.load(f)
 
 
+def _find_usb_in_board(board):
+    """Find USB peripheral with USBIP inject interface in board."""
+    for p in board.adapter.peripherals:
+        if hasattr(p, 'inject_setup_packet') and hasattr(p, 'wait_ep0_response'):
+            return p
+    return None
+
+
 async def main_async(args):
     usbip_port = getattr(args, 'usbip_port', 0)
 
@@ -1309,7 +1316,26 @@ async def main_async(args):
         print(f"\n[Board] {board_config.name} ({board_config.mcu})")
         print(f"[Listening] tcp://127.0.0.1:{args.port}")
         print(f"[Peripherals] {len(board.adapter.peripherals)}")
-        await tcp_server.serve_forever()
+
+        tasks = [tcp_server.serve_forever()]
+
+        # Start USBIP server if enabled (board mode)
+        if usbip_port > 0:
+            usb_periph = _find_usb_in_board(board)
+            if usb_periph:
+                from slab_cortex_m.usbip_server import USBIPServer
+                usbip_server = USBIPServer(port=usbip_port)
+                usbip_server.set_usb_peripheral(usb_periph)
+                usbip_srv = await asyncio.start_server(
+                    usbip_server.handle_client,
+                    '0.0.0.0', usbip_port, reuse_address=True)
+                tasks.append(usbip_srv.serve_forever())
+                print(f"\n[USBIP] Listening on port {usbip_port}")
+                print(f"  usbip_client.py attach --host localhost --port {usbip_port} --busid 1-1")
+            else:
+                log.warning("USBIP port specified but no USB peripheral found in board")
+
+        await asyncio.gather(*tasks)
 
     else:
         # Legacy mode: use built-in simple peripherals

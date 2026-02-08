@@ -817,6 +817,19 @@ class RP2040USB(RP2040Peripheral):
     INT_HOST_RESUME = 1 << 1
     INT_HOST_CONN_DIS = 1 << 0
 
+    # DPRAM layout
+    DPRAM_EP0_BUF_CTRL_IN = 0x00   # EP0 IN buffer control
+    DPRAM_EP0_BUF_CTRL_OUT = 0x04  # EP0 OUT buffer control
+    DPRAM_SETUP_PACKET = 0x80      # 8-byte SETUP packet
+    DPRAM_EP0_BUF_DATA = 0x100     # EP0 data buffer start
+
+    # Buffer control bits (in DPRAM)
+    BUF_CTRL_FULL = 1 << 15
+    BUF_CTRL_LAST = 1 << 14
+    BUF_CTRL_DATA_PID = 1 << 13
+    BUF_CTRL_AVAILABLE = 1 << 10
+    BUF_CTRL_LEN_MASK = 0x3FF
+
     def __init__(self, base: int = 0x50110000, irq: int = 5):
         super().__init__("USB", base, 0x100, irq)
 
@@ -828,6 +841,17 @@ class RP2040USB(RP2040Peripheral):
         self.inte = 0
         self.intf = 0
         self.intr = 0
+
+        # DPRAM reference (set by peripheral set after creation)
+        self.dpram = None  # type: Optional[RP2040USBDPRAM]
+
+        # USBIP firmware-in-the-loop state
+        self.setup_packet = b''
+        self._ep0_expected = 0
+        self._ep0_event = None  # type: Optional[asyncio.Event]
+        self._ep0_response = b''
+        self._ep0_accum = bytearray()
+        self._ep0_max_pkt = 64
 
     def _read_reg(self, offset: int, size: int) -> int:
         if offset == self.ADDR_ENDP:
@@ -881,6 +905,170 @@ class RP2040USB(RP2040Peripheral):
             self.intr &= ~value  # Write 1 to clear
         else:
             self.regs[offset] = value
+
+    def _update_interrupts(self):
+        """Update interrupt status and trigger IRQ if needed."""
+        ints = (self.intr | self.intf) & self.inte
+        if ints:
+            self.trigger_irq()
+
+    # =========================================================================
+    # USBIP Firmware-in-the-Loop Injection
+    # =========================================================================
+
+    def inject_vbus(self, connected: bool = True):
+        """Inject VBUS state change."""
+        if connected:
+            self.intr |= self.INT_VBUS_DETECT
+            self.log.info("VBUS asserted")
+        else:
+            self.intr &= ~self.INT_VBUS_DETECT
+            self.log.info("VBUS deasserted")
+        self._update_interrupts()
+
+    def inject_usbrst(self):
+        """Inject USB bus reset."""
+        self.intr |= self.INT_BUS_RESET
+        self.addr_endp[0] = 0  # Reset device address
+        self.log.info("Injected BUS_RESET")
+        self._update_interrupts()
+
+    def inject_enumdne(self):
+        """Inject enumeration done (no-op for RP2040).
+
+        RP2040 does not have an explicit enumeration done event.
+        After bus reset, firmware enables the pullup via SIE_CTRL.PULLUP_EN.
+        """
+        self.log.debug("ENUMDNE not applicable for RP2040 USB")
+
+    def inject_setup_packet(self, setup_data: bytes):
+        """Inject a USB SETUP packet into EP0.
+
+        Writes SETUP data to DPRAM setup buffer (offset 0x80),
+        sets INT_SETUP_REQ, and triggers interrupt.
+        """
+        assert len(setup_data) == 8, "SETUP packet must be 8 bytes"
+
+        if self.dpram:
+            # Write 8-byte SETUP packet to DPRAM offset 0x80
+            self.dpram.mem[self.DPRAM_SETUP_PACKET:self.DPRAM_SETUP_PACKET + 8] = setup_data
+
+        # Track SETUP for wait_ep0_response
+        self.setup_packet = setup_data
+        self._ep0_expected = setup_data[6] | (setup_data[7] << 8)
+
+        # Set SETUP_REQ interrupt
+        self.intr |= self.INT_SETUP_REQ
+        self.log.info(f"Injected SETUP: {setup_data.hex()} wLen={self._ep0_expected}")
+        self._update_interrupts()
+
+    def _handle_ep0_in_ready(self):
+        """EP0 IN buffer filled by firmware -- read response from DPRAM.
+
+        Called when firmware writes to EP0 IN buffer control with FULL bit set.
+        """
+        if not self.dpram or not self._ep0_event:
+            return
+
+        # Read EP0 IN buffer control from DPRAM
+        buf_ctrl = int.from_bytes(
+            self.dpram.mem[self.DPRAM_EP0_BUF_CTRL_IN:self.DPRAM_EP0_BUF_CTRL_IN + 4],
+            'little')
+
+        if not (buf_ctrl & self.BUF_CTRL_FULL):
+            return
+
+        pkt_len = buf_ctrl & self.BUF_CTRL_LEN_MASK
+        pkt_data = bytes(self.dpram.mem[self.DPRAM_EP0_BUF_DATA:self.DPRAM_EP0_BUF_DATA + pkt_len])
+
+        # Clear FULL bit (host consumed the data)
+        buf_ctrl &= ~self.BUF_CTRL_FULL
+        self.dpram.mem[self.DPRAM_EP0_BUF_CTRL_IN:self.DPRAM_EP0_BUF_CTRL_IN + 4] = \
+            buf_ctrl.to_bytes(4, 'little')
+
+        # Set BUFF_STATUS for EP0 IN (bit 0) and trigger interrupt
+        self.buff_status |= 1  # EP0 IN = bit 0
+        self.intr |= self.INT_BUFF_STATUS
+        self._update_interrupts()
+
+        # Accumulate for multi-packet
+        self._ep0_accum.extend(pkt_data)
+        total = len(self._ep0_accum)
+        self.log.info(f"EP0 IN packet: {pkt_len}B (total={total}/{self._ep0_expected})")
+
+        # Check completion: short packet or enough data
+        if pkt_len < self._ep0_max_pkt or total >= self._ep0_expected:
+            self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
+            self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes")
+            self._ep0_event.set()
+
+    async def wait_ep0_response(self, timeout: float = 5.0) -> bytes:
+        """Wait for firmware to complete EP0 IN transfer."""
+        import asyncio
+        self._ep0_event = asyncio.Event()
+        self._ep0_response = b''
+        self._ep0_accum = bytearray()
+        try:
+            await asyncio.wait_for(self._ep0_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            self.log.warning("EP0 response timeout (firmware did not respond)")
+            if self._ep0_accum:
+                self._ep0_response = bytes(self._ep0_accum)
+        finally:
+            self._ep0_event = None
+        return self._ep0_response
+
+    def inject_out_data(self, ep: int, data: bytes):
+        """Inject OUT data into an endpoint via DPRAM.
+
+        Writes data to the EP OUT buffer in DPRAM and sets BUFF_STATUS.
+        """
+        if self.dpram and len(data) > 0:
+            # EP0 OUT buffer data offset: 0x100 + 64 (EP0 IN uses first 64 bytes)
+            buf_offset = self.DPRAM_EP0_BUF_DATA + 64
+            self.dpram.mem[buf_offset:buf_offset + len(data)] = data
+
+            # Set EP0 OUT buffer control: length + FULL
+            buf_ctrl = len(data) | self.BUF_CTRL_FULL | self.BUF_CTRL_LAST
+            self.dpram.mem[self.DPRAM_EP0_BUF_CTRL_OUT:self.DPRAM_EP0_BUF_CTRL_OUT + 4] = \
+                buf_ctrl.to_bytes(4, 'little')
+
+        # Set BUFF_STATUS for EP0 OUT (bit 1) and trigger interrupt
+        self.buff_status |= (1 << 1)  # EP0 OUT = bit 1
+        self.intr |= self.INT_BUFF_STATUS
+        self.log.info(f"Injected OUT data EP{ep}: {len(data)} bytes")
+        self._update_interrupts()
+
+
+class RP2040USBDPRAM(RP2040Peripheral):
+    """
+    RP2040 USB DPRAM (4KB endpoint buffers at 0x50100000).
+
+    Memory layout:
+    - 0x000-0x07F: Endpoint buffer control registers (16 EPs x 2 x 4 bytes)
+    - 0x080-0x0FF: EP0 setup buffer (8 bytes at 0x80) + reserved
+    - 0x100-0xFFF: Endpoint data buffers
+    """
+
+    def __init__(self, base: int = 0x50100000):
+        super().__init__("USB_DPRAM", base, 0x1000, irq=-1)
+        self.mem = bytearray(0x1000)
+        self._usb_ctrl = None  # Back-reference to RP2040USB (set by peripheral set)
+
+    def _read_reg(self, offset: int, size: int) -> int:
+        if offset + size <= len(self.mem):
+            return int.from_bytes(self.mem[offset:offset + min(size, 4)], 'little')
+        return 0
+
+    def _write_reg(self, offset: int, size: int, value: int):
+        if offset + size <= len(self.mem):
+            self.mem[offset:offset + min(size, 4)] = \
+                (value & ((1 << (min(size, 4) * 8)) - 1)).to_bytes(min(size, 4), 'little')
+
+        # Hook: detect EP0 IN buffer control write with FULL bit
+        if offset == RP2040USB.DPRAM_EP0_BUF_CTRL_IN and self._usb_ctrl:
+            if value & RP2040USB.BUF_CTRL_FULL:
+                self._usb_ctrl._handle_ep0_in_ready()
 
 
 # =============================================================================

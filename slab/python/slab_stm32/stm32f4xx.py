@@ -53,6 +53,7 @@ class STM32F4xxPeripheralSet(STM32PeripheralSet):
         self._create_analog()
         self._create_dma()
         self._create_misc()
+        self._create_usb()
 
     def _create_clock_system(self):
         """Create RCC and related peripherals."""
@@ -191,6 +192,13 @@ class STM32F4xxPeripheralSet(STM32PeripheralSet):
         self.add_peripheral(self.crc)
         self.add_peripheral(self.rng)
         self.add_peripheral(self.dbg)
+
+    def _create_usb(self):
+        """Create USB OTG FS peripheral (DWC2)."""
+        from slab_cortex_m.usb_cdc_peripheral import USBCDCPeripheral
+        self.usb = USBCDCPeripheral(
+            name="USB_OTG_FS", base=0x50000000, size=0x40000, irq=67)
+        self.add_peripheral(self.usb)
 
 
 class STM32F405PeripheralSet(STM32F4xxPeripheralSet):
