@@ -59,6 +59,7 @@
 #include "qemu/sockets.h"
 #include "qemu/main-loop.h"
 #include "qom/object.h"
+#include "qemu/timer.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -86,7 +87,10 @@
  *   [24:28] - Size
  *   [28:32] - Sequence number
  *   [32:36] - IRQ status
- *   [36:64] - Reserved
+ *   [36:40] - Snapshot flags (save/restore)
+ *   [40:44] - Bus attributes (BusAttributes.pack() format, bit8=NS)
+ *   [44:48] - Program Counter (PC, for bootloop debugging)
+ *   [48:64] - Reserved
  *   [64:..] - Peripheral data region
  */
 
@@ -203,6 +207,10 @@ struct SlabPeriphProxyState {
     size_t shm_size;
     uint32_t shm_seq;
 
+    /* SHM IRQ polling timer (for async IRQ delivery) */
+    QEMUTimer *shm_irq_timer;
+    uint32_t shm_irq_prev;  /* Previous IRQ bitmap to detect changes */
+
     /* Register cache (for disconnected operation) */
     GHashTable *reg_cache;
 
@@ -222,6 +230,7 @@ struct SlabPeriphProxyState {
 static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s);
 static void slab_proxy_check_incoming(SlabPeriphProxyState *s);
 static bool slab_proxy_init_shm(SlabPeriphProxyState *s);
+static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s);
 
 /*
  * Sync MPU state from CPU to shared memory.
@@ -257,12 +266,26 @@ static void slab_proxy_sync_mpu_state(SlabPeriphProxyState *s)
     /* Write MPU_CTRL */
     mpu_area[0] = env->v7m.mpu_ctrl[0];  /* M_REG_NS bank */
 
-    /* Write per-region RBAR + RASR */
-    for (i = 0; i < SHM_MPU_MAX_REGIONS && i < cpu->pmsav7_dregion; i++) {
-        uint32_t rbar = env->pmsav7.drbar[i];
-        uint32_t rasr = env->pmsav7.drsr[i] | (env->pmsav7.dracr[i] << 16);
-        mpu_area[1 + i * 2] = rbar;
-        mpu_area[1 + i * 2 + 1] = rasr;
+    /* Write per-region RBAR + RASR/RLAR.
+     * PMSAv7 (Cortex-M3/M4/M7): drbar/drsr/dracr arrays
+     * PMSAv8 (Cortex-M23/M33/M55): rbar[bank]/rlar[bank] arrays */
+    if (env->pmsav7.drbar) {
+        /* PMSAv7 */
+        for (i = 0; i < SHM_MPU_MAX_REGIONS && i < cpu->pmsav7_dregion; i++) {
+            uint32_t rbar = env->pmsav7.drbar[i];
+            uint32_t rasr = env->pmsav7.drsr[i] | (env->pmsav7.dracr[i] << 16);
+            mpu_area[1 + i * 2] = rbar;
+            mpu_area[1 + i * 2 + 1] = rasr;
+        }
+    } else if (env->pmsav8.rbar[0]) {
+        /* PMSAv8 -- write RBAR + RLAR pairs */
+        for (i = 0; i < SHM_MPU_MAX_REGIONS && i < cpu->pmsav7_dregion; i++) {
+            mpu_area[1 + i * 2] = env->pmsav8.rbar[0][i];
+            mpu_area[1 + i * 2 + 1] = env->pmsav8.rlar[0][i];
+        }
+    } else {
+        /* No MPU -- zero all regions */
+        i = 0;
     }
 
     /* Zero out unused regions */
@@ -474,6 +497,15 @@ static uint64_t slab_proxy_shm_transaction(SlabPeriphProxyState *s,
     header[6] = size;          /* Size */
     header[7] = s->shm_seq;    /* Sequence */
 
+    /* Bus attributes: NS bit in BusAttributes.pack() format (bit 8) */
+    header[10] = (s->current_secure ? 0 : 1) << 8;
+
+    /* Current PC for bootloop debugging */
+    {
+        ARMCPU *cpu = ARM_CPU(first_cpu);
+        header[11] = cpu ? cpu->env.regs[15] : 0;
+    }
+
     /* Memory barrier */
     __sync_synchronize();
 
@@ -488,10 +520,7 @@ static uint64_t slab_proxy_shm_transaction(SlabPeriphProxyState *s,
     }
 
     /* Check for IRQ changes */
-    uint32_t irq_status = header[8];
-    for (uint32_t i = 0; i < s->num_irqs && i < 32; i++) {
-        qemu_set_irq(s->irqs[i], (irq_status >> i) & 1);
-    }
+    slab_proxy_shm_check_irqs(s);
 
     return result;
 }
@@ -503,7 +532,7 @@ static uint64_t slab_proxy_tcp_transaction(SlabPeriphProxyState *s, bool is_writ
                                             uint32_t addr, uint32_t size,
                                             uint64_t write_val)
 {
-    uint8_t req[16];
+    uint8_t req[20];
     uint8_t resp[8];
     int req_len;
     ssize_t n;
@@ -549,6 +578,17 @@ static uint64_t slab_proxy_tcp_transaction(SlabPeriphProxyState *s, bool is_writ
     } else {
         req[9] = s->current_secure ? 1 : 0;
         req_len = 10;
+    }
+
+    /* Append PC for bootloop debugging */
+    {
+        ARMCPU *cpu = ARM_CPU(first_cpu);
+        uint32_t pc = cpu ? cpu->env.regs[15] : 0;
+        req[req_len + 0] = (pc >> 0) & 0xFF;
+        req[req_len + 1] = (pc >> 8) & 0xFF;
+        req[req_len + 2] = (pc >> 16) & 0xFF;
+        req[req_len + 3] = (pc >> 24) & 0xFF;
+        req_len += 4;
     }
 
     /* Send request */
@@ -673,6 +713,59 @@ static const MemoryRegionOps slab_proxy_ops = {
 };
 
 /*
+ * Check SHM IRQ bitmap and deliver pending IRQs to the NVIC.
+ *
+ * Used by both the polling timer (async delivery) and the synchronous
+ * transaction path.  Only fires qemu_set_irq() on delta (changed bits)
+ * to avoid redundant NVIC updates.
+ */
+static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s)
+{
+    volatile uint32_t *header;
+    uint32_t irq_status;
+
+    if (!s->shm_ptr) {
+        return;
+    }
+
+    header = (volatile uint32_t *)s->shm_ptr;
+    irq_status = header[8];
+
+    if (irq_status != s->shm_irq_prev) {
+        for (uint32_t i = 0; i < s->num_irqs && i < 32; i++) {
+            int new_level = (irq_status >> i) & 1;
+            int old_level = (s->shm_irq_prev >> i) & 1;
+            if (new_level != old_level) {
+                qemu_set_irq(s->irqs[i], new_level);
+            }
+        }
+        s->shm_irq_prev = irq_status;
+    }
+}
+
+/*
+ * SHM IRQ polling timer callback.
+ *
+ * Runs every 100us in the QEMU main loop to check the SHM IRQ bitmap
+ * for changes and deliver pending IRQs to the NVIC.  Without this,
+ * IRQs would only be checked during peripheral transactions, causing
+ * interrupt-driven firmware (e.g. UART TX) to hang between accesses.
+ */
+#define SHM_IRQ_POLL_US 100  /* 100 microseconds */
+
+static void slab_proxy_shm_irq_timer(void *opaque)
+{
+    SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
+
+    slab_proxy_shm_check_irqs(s);
+
+    /* Reschedule */
+    timer_mod_ns(s->shm_irq_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_REALTIME)
+                 + (int64_t)SHM_IRQ_POLL_US * 1000);
+}
+
+/*
  * Initialize shared memory
  */
 static bool slab_proxy_init_shm(SlabPeriphProxyState *s)
@@ -721,7 +814,15 @@ static bool slab_proxy_init_shm(SlabPeriphProxyState *s)
     header[8] = 0;  /* IRQ status */
 
     s->shm_seq = 0;
+    s->shm_irq_prev = 0;
     s->mode = PROXY_MODE_SHM;
+
+    /* Start IRQ polling timer for async IRQ delivery (100us interval) */
+    s->shm_irq_timer = timer_new_ns(QEMU_CLOCK_REALTIME,
+                                     slab_proxy_shm_irq_timer, s);
+    timer_mod_ns(s->shm_irq_timer,
+                 qemu_clock_get_ns(QEMU_CLOCK_REALTIME)
+                 + (int64_t)SHM_IRQ_POLL_US * 1000);
 
     info_report("Slab Proxy [%s]: Shared memory %s ready (%zu bytes)",
                 s->name, s->shm_name, s->shm_size);

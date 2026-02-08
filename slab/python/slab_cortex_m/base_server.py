@@ -2,7 +2,8 @@
 Base TCP server for MCUemu peripheral proxying.
 
 Handles the binary protocol shared by all SoC servers:
-  Request:  [R/W/S/T:1][Addr:4][Size:4][Value:4 if write][Secure:1]
+  Read:     [R/S:1][Addr:4][Size:4][Secure:1][PC:4] = 14 bytes
+  Write:    [W/T:1][Addr:4][Size:4][Value:4][Secure:1][PC:4] = 18 bytes
   Response: [Value:4][Status:1]
   IRQ:      [I:1][IRQ#:4][Level:1]
 
@@ -50,6 +51,7 @@ class BasePeripheralServer(ABC):
         self.running = False
         self.client: Optional[asyncio.StreamWriter] = None
         self.tracer = None  # Optional[MMIOTracer] -- set to enable MMIO tracing
+        self.last_pc: int = 0  # Program counter from last QEMU transaction
         self.log = logging.getLogger(self.__class__.__name__)
 
     @abstractmethod
@@ -90,9 +92,10 @@ class BasePeripheralServer(ABC):
                 cmd = cmd_type[0]
 
                 if cmd in (CMD_READ, CMD_READ_S):
-                    data = await reader.readexactly(9)
+                    data = await reader.readexactly(13)
                     address, size = struct.unpack('<II', data[:8])
                     secure = (cmd == CMD_READ_S) or (data[8] == 1)
+                    self.last_pc = struct.unpack('<I', data[9:13])[0]
 
                     periph = self.find_peripheral(address)
                     if periph:
@@ -105,16 +108,18 @@ class BasePeripheralServer(ABC):
                             f"0x{address:08X}")
 
                     if self.tracer:
-                        self.tracer.trace_read(address, size, value, periph)
+                        self.tracer.trace_read(address, size, value, periph,
+                                               pc=self.last_pc)
 
                     resp = struct.pack('<IB', value, status)
                     writer.write(resp)
                     await writer.drain()
 
                 elif cmd in (CMD_WRITE, CMD_WRITE_S):
-                    data = await reader.readexactly(13)
+                    data = await reader.readexactly(17)
                     address, size, value = struct.unpack('<III', data[:12])
                     secure = (cmd == CMD_WRITE_S) or (data[12] == 1)
+                    self.last_pc = struct.unpack('<I', data[13:17])[0]
 
                     periph = self.find_peripheral(address)
                     if periph:
@@ -126,7 +131,8 @@ class BasePeripheralServer(ABC):
                             f"0x{address:08X} <- 0x{value:08X}")
 
                     if self.tracer:
-                        self.tracer.trace_write(address, size, value, periph)
+                        self.tracer.trace_write(address, size, value, periph,
+                                                pc=self.last_pc)
 
                     resp = struct.pack('<IB', 0, status)
                     writer.write(resp)

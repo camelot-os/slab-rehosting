@@ -37,6 +37,14 @@ from slab_cortex_m.board_builder import build_board
 from slab_cortex_m.base_server import BasePeripheralServer
 from slab_cortex_m.mmio_tracer import MMIOTracer
 
+# Try SHM
+try:
+    from slab_cortex_m.shm_peripheral import ShmPeripheralBridge, PeripheralHandler, BusAttributes
+    from multiprocessing import shared_memory
+    HAS_SHM = True
+except ImportError:
+    HAS_SHM = False
+
 log = logging.getLogger('CIRunner')
 
 # Try YAML
@@ -67,6 +75,7 @@ class Scenario:
     timeout: float = 30.0
     assertions: List[Assertion] = field(default_factory=list)
     qemu_args: List[str] = field(default_factory=list)
+    mode: str = "tcp"           # "tcp" or "shm"
 
 
 @dataclass
@@ -129,6 +138,48 @@ class CIBoardServer(BasePeripheralServer):
                     self._prev_gpio_states[key] = state
 
 
+class CIShmHandler(PeripheralHandler if HAS_SHM else object):
+    """SHM peripheral handler for CI scenarios using board builder."""
+
+    def __init__(self, board):
+        self.board = board
+        self.name = board.name
+        self.base_address = 0x40000000
+        self.size = 0x20000000
+        self.registers = {}
+        self.mmio_count = 0
+        self.gpio_toggles: Dict[str, int] = {}
+        self._prev_gpio_states: Dict[str, int] = {}
+
+    def read(self, address, size, bus_attrs=None):
+        self.mmio_count += 1
+        if self.board.contains(address):
+            secure = bus_attrs.ns == False if bus_attrs else True
+            result = self.board.read(address, size, secure)
+            return result[0] if isinstance(result, tuple) else result
+        return 0
+
+    def write(self, address, value, size, bus_attrs=None):
+        self.mmio_count += 1
+        if self.board.contains(address):
+            secure = bus_attrs.ns == False if bus_attrs else True
+            self.board.write(address, size, value, secure)
+
+    def _poll_gpio(self):
+        """Check GPIO state changes for toggle counting."""
+        for p in self.board.adapter.peripherals:
+            if hasattr(p, 'name') and 'GPIO' in getattr(p, 'name', ''):
+                odr = getattr(p, 'regs', {}).get(0x14, 0)
+                name = p.name
+                for pin in range(16):
+                    key = f"{name}.{pin}"
+                    state = (odr >> pin) & 1
+                    prev = self._prev_gpio_states.get(key, 0)
+                    if state != prev:
+                        self.gpio_toggles[key] = self.gpio_toggles.get(key, 0) + 1
+                    self._prev_gpio_states[key] = state
+
+
 # =============================================================================
 # ASSERTION CHECKERS
 # =============================================================================
@@ -146,11 +197,21 @@ def check_no_crash(result: ScenarioResult, params: dict) -> AssertionResult:
 
 def check_gpio_toggle(server: 'CIBoardServer', params: dict) -> AssertionResult:
     """Check that a GPIO pin toggled a minimum number of times."""
+    return _check_gpio_toggle_dict(server.gpio_toggles, params)
+
+
+def check_mmio_count(server: 'CIBoardServer', params: dict) -> AssertionResult:
+    """Check that MMIO operations exceeded a minimum count."""
+    return _check_mmio_count_val(server.mmio_count, params)
+
+
+def _check_gpio_toggle_dict(gpio_toggles: dict, params: dict) -> AssertionResult:
+    """Check GPIO toggle count from a dict."""
     gpio = params.get('gpio', 'GPIOA')
     pin = params.get('pin', 0)
     min_toggles = params.get('min_toggles', 2)
     key = f"{gpio}.{pin}"
-    actual = server.gpio_toggles.get(key, 0)
+    actual = gpio_toggles.get(key, 0)
     ok = actual >= min_toggles
     return AssertionResult(
         name=f"gpio_toggle({key}>={min_toggles})",
@@ -159,14 +220,14 @@ def check_gpio_toggle(server: 'CIBoardServer', params: dict) -> AssertionResult:
     )
 
 
-def check_mmio_count(server: 'CIBoardServer', params: dict) -> AssertionResult:
-    """Check that MMIO operations exceeded a minimum count."""
+def _check_mmio_count_val(mmio_count: int, params: dict) -> AssertionResult:
+    """Check MMIO count against threshold."""
     min_count = params.get('min', 10)
-    ok = server.mmio_count >= min_count
+    ok = mmio_count >= min_count
     return AssertionResult(
         name=f"mmio_count(>={min_count})",
         passed=ok,
-        detail=f"count={server.mmio_count}"
+        detail=f"count={mmio_count}"
     )
 
 
@@ -196,7 +257,13 @@ class CIRunner:
         return 'build/qemu-system-arm'
 
     async def run_scenario(self, scenario: Scenario) -> ScenarioResult:
-        """Run a single emulation scenario."""
+        """Run a single emulation scenario (dispatches TCP or SHM)."""
+        if scenario.mode == "shm":
+            return await self.run_scenario_shm(scenario)
+        return await self.run_scenario_tcp(scenario)
+
+    async def run_scenario_tcp(self, scenario: Scenario) -> ScenarioResult:
+        """Run a single emulation scenario via TCP proxy."""
         start_time = time.time()
         result = ScenarioResult(
             scenario=scenario.name,
@@ -244,7 +311,7 @@ class CIRunner:
 
             # Poll GPIO during execution
             poll_task = asyncio.ensure_future(
-                self._poll_loop(server, scenario.timeout))
+                self._poll_loop_tcp(server, scenario.timeout))
 
             try:
                 await asyncio.wait_for(qemu.wait(), timeout=scenario.timeout)
@@ -265,23 +332,8 @@ class CIRunner:
             result.mmio_count = server.mmio_count
 
             # Run assertions
-            for assertion in scenario.assertions:
-                if assertion.type == 'no_crash':
-                    result.assertions.append(
-                        check_no_crash(result, assertion.params))
-                elif assertion.type == 'gpio_toggle':
-                    result.assertions.append(
-                        check_gpio_toggle(server, assertion.params))
-                elif assertion.type == 'mmio_count':
-                    result.assertions.append(
-                        check_mmio_count(server, assertion.params))
-                else:
-                    result.assertions.append(AssertionResult(
-                        name=assertion.type,
-                        passed=False,
-                        detail=f"Unknown assertion type: {assertion.type}"))
-
-            result.passed = all(a.passed for a in result.assertions)
+            self._check_assertions(scenario, result, server.gpio_toggles,
+                                   server.mmio_count)
 
             # Cleanup
             server.running = False
@@ -295,11 +347,135 @@ class CIRunner:
         result.duration = time.time() - start_time
         return result
 
-    async def _poll_loop(self, server: CIBoardServer, timeout: float):
-        """Poll GPIO states during execution."""
+    async def run_scenario_shm(self, scenario: Scenario) -> ScenarioResult:
+        """Run a single emulation scenario via SHM proxy."""
+        start_time = time.time()
+        result = ScenarioResult(
+            scenario=scenario.name,
+            passed=False,
+            duration=0,
+        )
+
+        if not HAS_SHM:
+            result.error = "SHM not available"
+            result.duration = time.time() - start_time
+            return result
+
+        shm_name = f"/slab_ci_{os.getpid()}_{int(time.time() * 1000) % 100000}"
+
+        try:
+            board_config = load_board_config(scenario.board)
+            board = build_board(board_config)
+            handler = CIShmHandler(board)
+
+            bridge = ShmPeripheralBridge(shm_name=shm_name)
+            bridge.create()
+            bridge.register_peripheral(handler.base_address, handler)
+
+            # Wire board IRQ callback to SHM bridge
+            board.irq_callback = lambda irq_num, level=1: (
+                bridge.set_irq(irq_num) if level else bridge.clear_irq(irq_num))
+
+            bridge.start_handler()
+
+            # Build QEMU command (SHM mode)
+            cpu = get_qemu_cpu(board_config)
+            machine_opts = f'slab-cortex-m,cpu-type={cpu},shm-name={shm_name}'
+            for k, v in board_config.qemu_extra.items():
+                machine_opts += f',{k}={v}'
+            cmd = [
+                self.qemu_bin,
+                '-M', machine_opts,
+                '-kernel', scenario.firmware,
+                '-nographic', '-monitor', 'none',
+            ] + scenario.qemu_args
+
+            log.info(f"[{scenario.name}] Starting QEMU (SHM): "
+                     f"{' '.join(cmd[:8])}...")
+
+            qemu = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+
+            # Poll GPIO during execution
+            poll_task = asyncio.ensure_future(
+                self._poll_loop_shm(handler, scenario.timeout))
+
+            try:
+                await asyncio.wait_for(qemu.wait(), timeout=scenario.timeout)
+            except asyncio.TimeoutError:
+                qemu.terminate()
+                try:
+                    await asyncio.wait_for(qemu.wait(), timeout=5)
+                except asyncio.TimeoutError:
+                    qemu.kill()
+
+            poll_task.cancel()
+            try:
+                await poll_task
+            except asyncio.CancelledError:
+                pass
+
+            result.qemu_exit_code = qemu.returncode or 0
+            result.mmio_count = handler.mmio_count
+
+            self._check_assertions(scenario, result, handler.gpio_toggles,
+                                   handler.mmio_count)
+
+            # Cleanup SHM
+            bridge._running = False
+            if bridge._thread:
+                bridge._thread.join(timeout=1.0)
+            try:
+                shm_obj = shared_memory.SharedMemory(name=shm_name, create=False)
+                shm_obj.close()
+                shm_obj.unlink()
+            except Exception:
+                pass
+            bridge.close()
+
+        except Exception as e:
+            result.error = str(e)
+            log.error(f"[{scenario.name}] Error: {e}")
+
+        result.duration = time.time() - start_time
+        return result
+
+    def _check_assertions(self, scenario: Scenario, result: ScenarioResult,
+                          gpio_toggles: dict, mmio_count: int):
+        """Run assertions for a scenario result."""
+        for assertion in scenario.assertions:
+            if assertion.type == 'no_crash':
+                result.assertions.append(
+                    check_no_crash(result, assertion.params))
+            elif assertion.type == 'gpio_toggle':
+                # Build a minimal object with gpio_toggles attribute
+                result.assertions.append(
+                    _check_gpio_toggle_dict(gpio_toggles, assertion.params))
+            elif assertion.type == 'mmio_count':
+                result.assertions.append(
+                    _check_mmio_count_val(mmio_count, assertion.params))
+            else:
+                result.assertions.append(AssertionResult(
+                    name=assertion.type,
+                    passed=False,
+                    detail=f"Unknown assertion type: {assertion.type}"))
+        result.passed = all(a.passed for a in result.assertions)
+
+    async def _poll_loop_tcp(self, server: CIBoardServer, timeout: float):
+        """Poll GPIO states during TCP execution."""
         end = time.time() + timeout
         while time.time() < end:
             server._poll_gpio()
+            await asyncio.sleep(0.05)
+
+    async def _poll_loop_shm(self, handler: 'CIShmHandler', timeout: float):
+        """Poll GPIO states during SHM execution."""
+        end = time.time() + timeout
+        while time.time() < end:
+            handler._poll_gpio()
             await asyncio.sleep(0.05)
 
     def run_batch(self, scenarios: List[Scenario]) -> List[ScenarioResult]:
@@ -388,6 +564,7 @@ def load_scenarios(path: str) -> List[Scenario]:
             timeout=s.get('timeout', 30),
             assertions=assertions,
             qemu_args=s.get('qemu_args', []),
+            mode=s.get('mode', 'tcp'),
         ))
     return scenarios
 
@@ -428,6 +605,8 @@ def main():
                         help='Output JUnit XML to file')
     parser.add_argument('--qemu', type=str,
                         help='Path to QEMU binary')
+    parser.add_argument('--shm', action='store_true',
+                        help='Also run each scenario via SHM proxy')
     args = parser.parse_args()
 
     # Load scenarios
@@ -438,6 +617,23 @@ def main():
         scenarios = discover_scenarios(args.batch)
     else:
         parser.error("Either --scenario or --batch required")
+
+    # Duplicate scenarios for SHM testing
+    if args.shm and HAS_SHM:
+        shm_scenarios = []
+        for s in scenarios:
+            if s.mode == "tcp":
+                shm_s = Scenario(
+                    name=f"{s.name} [shm]",
+                    board=s.board,
+                    firmware=s.firmware,
+                    timeout=s.timeout,
+                    assertions=s.assertions,
+                    qemu_args=s.qemu_args,
+                    mode="shm",
+                )
+                shm_scenarios.append(shm_s)
+        scenarios.extend(shm_scenarios)
 
     if not scenarios:
         log.error("No scenarios found")

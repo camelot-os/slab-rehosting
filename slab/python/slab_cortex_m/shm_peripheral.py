@@ -205,7 +205,13 @@ class ShmHeader:
             magic, version, command, status, address, value, size, seq = \
                 struct.unpack('<IIIIIIII', data[:32])
             irq = struct.unpack('<I', data[32:36])[0]
-            bus_attrs = BusAttributes()
+            # Extended v1: bus attributes at offset 40, PC at offset 44
+            if len(data) >= 48:
+                bus_attrs_word, pc = struct.unpack('<II', data[40:48])
+                bus_attrs = BusAttributes.unpack(bus_attrs_word) if bus_attrs_word else BusAttributes()
+            else:
+                bus_attrs = BusAttributes()
+                pc = 0
             return magic, version, command, status, address, value, size, seq, irq, bus_attrs
 
 
@@ -239,6 +245,9 @@ class ShmPeripheralBridge:
 
     # Fault handler (for crash detection and auto-snapshot)
     fault_handler: Optional[Any] = None  # FaultHandler instance
+
+    # Current program counter (updated each transaction, for bootloop debugging)
+    last_pc: int = 0
 
     # Statistics
     reads: int = 0
@@ -325,6 +334,10 @@ class ShmPeripheralBridge:
 
             # Check for new command (sequence number changed)
             if seq != last_seq and command != ShmCommand.NOP:
+                # Read PC from extended v1 header (offset 44)
+                if len(header_data) >= 48:
+                    self.last_pc = struct.unpack('<I', header_data[44:48])[0]
+
                 # Sync protection state from C-side (piggyback on each transaction)
                 if self.protection:
                     if isinstance(self.protection, CortexMPU):

@@ -199,14 +199,14 @@ class MMIOTracer:
         self._started = False
 
     def trace_read(self, address: int, size: int, value: int,
-                   peripheral=None):
+                   peripheral=None, pc: int = 0):
         """Record a read access."""
-        self._record(False, address, size, value, peripheral)
+        self._record(False, address, size, value, peripheral, pc=pc)
 
     def trace_write(self, address: int, size: int, value: int,
-                    peripheral=None):
+                    peripheral=None, pc: int = 0):
         """Record a write access."""
-        self._record(True, address, size, value, peripheral)
+        self._record(True, address, size, value, peripheral, pc=pc)
 
     @staticmethod
     def _resolve_peripheral(peripheral, address: int):
@@ -230,7 +230,7 @@ class MMIOTracer:
         return peripheral
 
     def _record(self, is_write: bool, address: int, size: int,
-                value: int, peripheral):
+                value: int, peripheral, pc: int = 0):
         """Create and store a trace record."""
         if not self._started:
             self._start_time = time.monotonic()
@@ -265,6 +265,7 @@ class MMIOTracer:
             peripheral_name=pname,
             register_name=reg_name,
             bitfields=bitfields,
+            pc=pc,
         )
         self._traces.append(trace)
 
@@ -275,16 +276,17 @@ class MMIOTracer:
     def export_text(self, path: str):
         """Export in Slab MMIO log format (compatible with svd_composer.py).
 
-        Format: [seq] R/W 0xADDR size 0xVALUE  PERIPH->REG [bitfields]
+        Format: [seq] R/W 0xADDR size 0xVALUE  PERIPH->REG [bitfields] @PC
         """
         with open(path, 'w') as f:
             for t in self._traces:
                 rw = 'W' if t.is_write else 'R'
                 bf = f"  [{t.bitfields}]" if t.bitfields else ""
+                pc = f"  @0x{t.pc:08X}" if t.pc else ""
                 f.write(
                     f"{t.sequence:08d} {rw} 0x{t.address:08X} {t.size} "
                     f"0x{t.value:08X}  {t.peripheral_name}->{t.register_name}"
-                    f"{bf}\n"
+                    f"{bf}{pc}\n"
                 )
 
     def export_json(self, path: str):
@@ -311,14 +313,15 @@ class MMIOTracer:
         """Export as CSV for spreadsheet analysis."""
         with open(path, 'w') as f:
             f.write("sequence,timestamp,rw,address,size,value,"
-                    "peripheral,register,bitfields\n")
+                    "peripheral,register,bitfields,pc\n")
             for t in self._traces:
                 rw = 'W' if t.is_write else 'R'
+                pc = f"0x{t.pc:08X}" if t.pc else ""
                 f.write(
                     f"{t.sequence},{t.timestamp:.6f},{rw},"
                     f"0x{t.address:08X},{t.size},0x{t.value:08X},"
                     f"{t.peripheral_name},{t.register_name},"
-                    f"{t.bitfields}\n"
+                    f"{t.bitfields},{pc}\n"
                 )
 
     # -------------------------------------------------------------------------

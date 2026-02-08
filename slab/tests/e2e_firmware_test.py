@@ -706,14 +706,13 @@ def build_test_cases() -> List[TestCase]:
             timeout=6, expect_mmio=10,
         ))
 
-        # -- STM32H563 TZ via SHM (TrustZone + SHM causes SIGSEGV in QEMU) --
+        # -- STM32H563 TZ via SHM --
         tests.append(TestCase(
             name="STM32H563 TZ Secure [shm]",
             firmware="slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin",
             cpu="cortex-m33", mode="shm",
             board_yaml="slab/boards/stm32h563_tz.yaml",
             timeout=10, expect_mmio=20,
-            known_issue="TrustZone + SHM proxy not yet supported",
             qemu_args=[
                 "-device", "loader,file=slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000,force-raw=on",
             ],
