@@ -586,7 +586,14 @@ Next Steps
 
 - :ref:`debugging_bootloops` - Fix tests that hang during boot
 - :ref:`stubbing_peripherals` - Create custom peripheral stubs for complex devices
-- ``slab/ci/`` - Browse existing test scenarios (``test_hello_blink.yaml``, ``test_h563_tz.yaml``)
+- ``slab/ci/`` - Browse existing test scenarios:
+
+  - ``test_hello_blink.yaml`` -- STM32F405 bare-metal demos (HelloBlink, HelloBlinkUart)
+  - ``test_f405_rtos.yaml`` -- STM32F405 RTOS demos (FreeRTOS, CubeMX HAL)
+  - ``test_f439_peripherals.yaml`` -- STM32F439 USB CDC crypto (standard + WooKey board)
+  - ``test_l433_peripherals.yaml`` -- STM32L433 I2C EEPROM with 24C256
+  - ``test_wb55_cdc.yaml`` -- STM32WB55 USB CDC blinky (PMA USB FS)
+  - ``test_h563_tz.yaml`` -- STM32H563 TrustZone dual-image boot
 
 **Further Reading:**
 

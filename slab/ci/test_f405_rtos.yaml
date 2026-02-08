@@ -1,0 +1,25 @@
+# CI Test: STM32F405 RTOS demos
+#
+# Tests FreeRTOS and CubeMX HAL blinky examples.
+# Both use the STM32F405 with basic GPIO + SysTick.
+#
+# Board: STM32F405 with LED on GPIOA pin 13
+# Firmware: RTOS-based (FreeRTOS, CubeMX HAL)
+scenarios:
+  - name: "STM32F405 FreeRTOS Blinky"
+    board: slab/boards/stm32f405_hello_blink.yaml
+    firmware: slab/examples/cortex-m/stm32/f405/rtos/freertos_blinky/build/freertos_blinky.bin
+    timeout: 6
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 20}
+
+  - name: "STM32F405 CubeMX Blinky"
+    board: slab/boards/stm32f405_hello_blink.yaml
+    firmware: slab/examples/cortex-m/stm32/f405/rtos/cubemx_blinky/build/blinky.bin
+    timeout: 6
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 50}

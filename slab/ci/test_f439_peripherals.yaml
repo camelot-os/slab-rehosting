@@ -1,0 +1,26 @@
+# CI Test: STM32F439 peripheral examples
+#
+# Tests USB CDC crypto firmware on two different boards:
+# - STM32F439 Crypto CDC: USB OTG FS with CRYP/HASH accelerators
+# - STM32F439 WooKey: ANSSI secure USB storage board (ILI9341 LCD, 4 LEDs)
+#
+# Both use the same crypto CDC firmware but different board configs,
+# validating that the board builder wires peripherals correctly.
+scenarios:
+  - name: "STM32F439 Crypto CDC"
+    board: slab/boards/stm32f439_crypto_cdc.yaml
+    firmware: slab/examples/cortex-m/stm32/f439/usb/crypto_cdc/stm32_crypto_cdc.bin
+    timeout: 6
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 40000}
+
+  - name: "STM32F439 WooKey board"
+    board: slab/boards/stm32f439_wookey.yaml
+    firmware: slab/examples/cortex-m/stm32/f439/usb/crypto_cdc/stm32_crypto_cdc.bin
+    timeout: 6
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 40000}

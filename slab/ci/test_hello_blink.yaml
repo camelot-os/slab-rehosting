@@ -1,3 +1,10 @@
+# CI Test: STM32F405 bare-metal demos
+#
+# Tests the HelloBlink and HelloBlinkUart HAL-based demos.
+# These are the simplest examples -- GPIO toggling + UART output.
+#
+# Board: STM32F405 with LED on GPIOA pin 13
+# Firmware: HAL-based bare-metal (no RTOS)
 scenarios:
   - name: "STM32F405 LED blink"
     board: slab/boards/stm32f405_hello_blink.yaml

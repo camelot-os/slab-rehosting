@@ -1,3 +1,10 @@
+# CI Test: STM32H563 TrustZone dual-image boot
+#
+# Tests the H563 TrustZone firmware with Secure + Non-Secure images.
+# Secure world initializes SAU, GTZC, IWDG, USART1, then jumps to NS.
+#
+# Board: STM32H563 TZ with flash at 0x0C000000, SRAM at 0x30000000
+# Firmware: Secure (0x0C000000) + Non-Secure (0x08042000)
 scenarios:
   - name: "STM32H563 TrustZone dual-image boot"
     board: slab/boards/stm32h563_tz.yaml

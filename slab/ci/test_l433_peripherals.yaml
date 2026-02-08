@@ -1,0 +1,16 @@
+# CI Test: STM32L433 peripheral examples
+#
+# Tests I2C EEPROM communication with 24C256 external device.
+# The board builder wires the EEPROM to I2C1 via the I2C adapter.
+#
+# Board: STM32L433 with 24C256 EEPROM on I2C1, LED on GPIOB pin 13
+# Firmware: Bare-metal I2C read/write test
+scenarios:
+  - name: "STM32L433 I2C EEPROM"
+    board: slab/boards/stm32l433_i2c_eeprom.yaml
+    firmware: slab/examples/cortex-m/stm32/l433/peripherals/i2c_eeprom/stm32l433_i2c_eeprom_test.bin
+    timeout: 6
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 10}
