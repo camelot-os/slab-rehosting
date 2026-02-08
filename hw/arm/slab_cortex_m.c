@@ -907,6 +907,7 @@ struct SlabCortexMState {
     MemoryRegion sram;
     MemoryRegion bootrom;
     MemoryRegion shared_sram;
+    MemoryRegion ns_flash;
 
     /* Clock */
     Clock *sysclk;
@@ -929,6 +930,8 @@ struct SlabCortexMState {
     bool trustzone;
     uint32_t secure_flash_size;
     uint32_t secure_sram_size;
+    uint32_t ns_flash_base;
+    uint32_t ns_flash_size;
 
     /* Bootrom configuration */
     char *bootrom_file;
@@ -1045,6 +1048,18 @@ static void slab_cortex_m_init(MachineState *machine)
                                s->shared_sram_size, &error_fatal);
         memory_region_add_subregion(get_system_memory(),
                                     s->shared_sram_base, &s->shared_sram);
+    }
+
+    /* ========== NS FLASH (TrustZone dual-image) ========== */
+    if (s->ns_flash_base != 0 && s->ns_flash_size != 0) {
+        memory_region_init_rom(&s->ns_flash, NULL, "slab.ns_flash",
+                               s->ns_flash_size, &error_fatal);
+        memory_region_add_subregion(get_system_memory(),
+                                    s->ns_flash_base, &s->ns_flash);
+        info_report("  NS Flash:    0x%08X - 0x%08X (%d KB)",
+                    s->ns_flash_base,
+                    s->ns_flash_base + s->ns_flash_size - 1,
+                    s->ns_flash_size / 1024);
     }
 
     /* Create peripheral proxy */
@@ -1344,6 +1359,53 @@ static void slab_cortex_m_set_sram_size(Object *obj, const char *value, Error **
     s->sram_size = (uint32_t)v;
 }
 
+static char *slab_cortex_m_get_sysclk_hz(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("%u", s->sysclk_hz);
+}
+
+static void slab_cortex_m_set_sysclk_hz(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    if (v == 0 || v > 1000000000) {
+        error_setg(errp, "sysclk-hz must be between 1 and 1000000000");
+        return;
+    }
+    s->sysclk_hz = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_ns_flash_base(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%08x", s->ns_flash_base);
+}
+
+static void slab_cortex_m_set_ns_flash_base(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    s->ns_flash_base = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_ns_flash_size(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%08x", s->ns_flash_size);
+}
+
+static void slab_cortex_m_set_ns_flash_size(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    if (v > 64 * 1024 * 1024) {
+        error_setg(errp, "ns-flash-size must be <= 64MB");
+        return;
+    }
+    s->ns_flash_size = (uint32_t)v;
+}
+
 static void slab_cortex_m_instance_init(Object *obj)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
@@ -1363,6 +1425,8 @@ static void slab_cortex_m_instance_init(Object *obj)
     s->bootrom_size = 0x10000;
     s->shared_sram_base = 0x38000000;
     s->shared_sram_size = 0x8000;
+    s->ns_flash_base = 0;  /* 0 = disabled */
+    s->ns_flash_size = 0;
 }
 
 static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
@@ -1437,6 +1501,13 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
     object_class_property_set_description(oc, "usbip-port",
         "USBIP server port for DWC2 USB device controller (0 = disabled, default: 0)");
 
+    /* System clock */
+    object_class_property_add_str(oc, "sysclk-hz",
+                                  slab_cortex_m_get_sysclk_hz,
+                                  slab_cortex_m_set_sysclk_hz);
+    object_class_property_set_description(oc, "sysclk-hz",
+        "System clock frequency in Hz (default: 168000000)");
+
     /* Memory layout properties */
     object_class_property_add_str(oc, "flash-base",
                                   slab_cortex_m_get_flash_base,
@@ -1461,6 +1532,18 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
                                   slab_cortex_m_set_sram_size);
     object_class_property_set_description(oc, "sram-size",
         "SRAM size in bytes (default: 0x40000 = 256KB)");
+
+    object_class_property_add_str(oc, "ns-flash-base",
+                                  slab_cortex_m_get_ns_flash_base,
+                                  slab_cortex_m_set_ns_flash_base);
+    object_class_property_set_description(oc, "ns-flash-base",
+        "Non-secure flash base address for TrustZone (default: 0 = disabled)");
+
+    object_class_property_add_str(oc, "ns-flash-size",
+                                  slab_cortex_m_get_ns_flash_size,
+                                  slab_cortex_m_set_ns_flash_size);
+    object_class_property_set_description(oc, "ns-flash-size",
+        "Non-secure flash size in bytes (default: 0 = disabled)");
 }
 
 static const TypeInfo slab_cortex_m_info = {

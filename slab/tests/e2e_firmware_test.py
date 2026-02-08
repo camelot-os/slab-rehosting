@@ -61,6 +61,7 @@ class TestCase:
     expect_mmio: int = 10  # Minimum MMIO ops to consider "alive"
     known_issue: str = ""  # Non-empty = expected failure, skip pass/fail
     qemu_extra: dict = field(default_factory=dict)  # Extra -M props (flash-base etc)
+    qemu_args: list = field(default_factory=list)   # Extra raw QEMU arguments
 
 
 @dataclass
@@ -180,6 +181,13 @@ async def run_one_test(tc: TestCase) -> TestResult:
             config = BoardConfig(name=tc.name, mcu=tc.mcu)
             pset = create_peripheral_set(config)
             server = DirectServer(pset, port)
+            # Wire UART capture for direct mode
+            server.uart_output = bytearray()
+            for p in getattr(pset, 'peripherals', []):
+                pname = getattr(p, 'name', '')
+                if ('USART' in pname or 'UART' in pname) and hasattr(p, 'on_tx'):
+                    buf = server.uart_output
+                    p.on_tx = lambda byte, b=buf: b.append(byte & 0xFF)
 
         else:  # legacy
             from slab_cortex_m.mcuemu_server import MCUemuServer, DEFAULT_CONFIG
@@ -219,6 +227,7 @@ async def run_one_test(tc: TestCase) -> TestResult:
         '-kernel', str(fw_path),
         '-nographic', '-monitor', 'none',
     ]
+    qemu_cmd.extend(tc.qemu_args)
 
     # Launch QEMU
     try:
@@ -257,6 +266,10 @@ async def run_one_test(tc: TestCase) -> TestResult:
     result.mmio_count = getattr(server, 'mmio_count', 0)
     result.duration = time.time() - start
     result.tracer = tracer
+
+    # Collect UART output for direct-mode tests
+    if tc.mode == "direct" and hasattr(server, 'uart_output') and server.uart_output:
+        result.uart_output = server.uart_output.decode('ascii', errors='replace')
 
     # Collect device transaction data for board-mode tests
     if tc.mode == "board" and hasattr(server, 'board'):
@@ -470,13 +483,24 @@ def build_test_cases() -> List[TestCase]:
         qemu_extra={"flash-base": "0x10000000"},
     ))
 
-    # -- STM32H563 TZ (flash at 0x0C000000) --
+    # -- STM32H563 TZ (flash at 0x0C000000, NS image at 0x08042000) --
     tests.append(TestCase(
         name="STM32H563 TZ Secure [direct]",
         firmware="slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin",
         cpu="cortex-m33", mode="direct", mcu="STM32H563",
-        timeout=6, expect_mmio=5,
-        qemu_extra={"flash-base": "0x0C000000", "sram-base": "0x30000000", "sram-size": "0x50000"},
+        timeout=10, expect_mmio=20,
+        qemu_extra={
+            "flash-base": "0x0C000000",
+            "sram-base": "0x30000000",
+            "sram-size": "0x50000",
+            "trustzone": "on",
+            "sysclk-hz": "250000000",
+            "ns-flash-base": "0x08040000",
+            "ns-flash-size": "0x1C0000",
+        },
+        qemu_args=[
+            "-device", "loader,file=slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000,force-raw=on",
+        ],
     ))
 
     return tests
@@ -536,6 +560,9 @@ async def main():
                   f"exit={result.qemu_exit}, {result.duration:.1f}s)")
         elif result.passed:
             print(f"PASS ({result.mmio_count} MMIO{txn_info}, {result.duration:.1f}s)")
+            if result.uart_output:
+                for line in result.uart_output.strip().split('\n')[:5]:
+                    print(f"         uart: {line.strip()}")
         else:
             print(f"FAIL ({result.error}, exit={result.qemu_exit}, "
                   f"{result.mmio_count} MMIO{txn_info}, {result.duration:.1f}s)")
