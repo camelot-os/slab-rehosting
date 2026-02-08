@@ -35,6 +35,13 @@ sys.path.insert(0, str(PROJECT_ROOT / "slab" / "python"))
 from slab_cortex_m.base_server import BasePeripheralServer, STATUS_OK
 from slab_cortex_m.mmio_tracer import MMIOTracer
 
+# SHM support (optional -- POSIX shared memory may not be available)
+try:
+    from slab_cortex_m.shm_peripheral import ShmPeripheralBridge, PeripheralHandler
+    HAS_SHM = True
+except Exception:
+    HAS_SHM = False
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s.%(msecs)03d [%(levelname)5s] %(name)-12s: %(message)s',
@@ -143,6 +150,44 @@ class BoardModeServer(BasePeripheralServer):
             self.mmio_count += 1
             return self.board
         return None
+
+
+# =============================================================================
+# SHM BOARD HANDLER (adapts Board to ShmPeripheralBridge interface)
+# =============================================================================
+
+class ShmBoardHandler(PeripheralHandler if HAS_SHM else object):
+    """Adapter wrapping a Board object as a SHM PeripheralHandler."""
+
+    def __init__(self, board):
+        self.board = board
+        self.name = board.name
+        self.base_address = 0x40000000
+        self.size = 0x20000000  # 0x40000000 - 0x5FFFFFFF
+        self.registers = {}
+        self.mmio_count = 0
+
+    def read(self, address, size, bus_attrs=None):
+        self.mmio_count += 1
+        if self.board.contains(address):
+            secure = bus_attrs.ns == False if bus_attrs else True
+            result = self.board.read(address, size, secure)
+            if isinstance(result, tuple):
+                return result[0]
+            return result
+        return 0
+
+    def write(self, address, value, size, bus_attrs=None):
+        self.mmio_count += 1
+        if self.board.contains(address):
+            secure = bus_attrs.ns == False if bus_attrs else True
+            self.board.write(address, size, value, secure)
+
+    def check_access(self, bus_attrs=None):
+        return True
+
+    def reset(self):
+        pass
 
 
 # =============================================================================
@@ -299,6 +344,133 @@ async def run_one_test(tc: TestCase) -> TestResult:
     server.running = False
     tcp_server.close()
     await tcp_server.wait_closed()
+
+    return result
+
+
+async def run_one_test_shm(tc: TestCase) -> TestResult:
+    """Run a single firmware E2E test using SHM proxy instead of TCP."""
+    result = TestResult(name=tc.name, passed=False)
+    start = time.time()
+    fw_path = PROJECT_ROOT / tc.firmware
+
+    if not fw_path.exists():
+        result.error = f"Firmware not found: {tc.firmware}"
+        return result
+
+    if not HAS_SHM:
+        result.error = "SHM not available (shared_memory module missing)"
+        return result
+
+    # Generate unique SHM name
+    shm_name = f"/slab_e2e_{os.getpid()}_{int(time.time() * 1000) % 100000}"
+
+    # Create board and SHM handler
+    board_qemu_extra = {}
+    try:
+        from slab_cortex_m.board import load_board_config, BoardConfig
+        from slab_cortex_m.board_builder import build_board
+
+        if tc.board_yaml:
+            board_config = load_board_config(str(PROJECT_ROOT / tc.board_yaml))
+            board_qemu_extra = board_config.qemu_extra
+        else:
+            board_config = BoardConfig(name=tc.name, mcu=tc.mcu)
+
+        board = build_board(board_config)
+        handler = ShmBoardHandler(board)
+    except Exception as e:
+        result.error = f"SHM server creation failed: {e}"
+        result.duration = time.time() - start
+        return result
+
+    # Create SHM bridge and register handler
+    bridge = ShmPeripheralBridge(shm_name=shm_name)
+    bridge.create()
+    bridge.register_peripheral(handler.base_address, handler)
+    bridge.start_handler()
+
+    # Build QEMU command (SHM mode: shm-name instead of tcp-port)
+    machine_opts = f'slab-cortex-m,cpu-type={tc.cpu},shm-name={shm_name}'
+    # Merge board config qemu_extra and test case qemu_extra
+    all_extra = {**board_qemu_extra, **tc.qemu_extra}
+    for key, val in all_extra.items():
+        machine_opts += f',{key}={val}'
+    qemu_cmd = [
+        str(QEMU_BIN),
+        '-M', machine_opts,
+        '-kernel', str(fw_path),
+        '-nographic', '-monitor', 'none',
+    ]
+    qemu_cmd.extend(tc.qemu_args)
+
+    # Launch QEMU
+    try:
+        qemu = await asyncio.create_subprocess_exec(
+            *qemu_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+    except Exception as e:
+        result.error = f"QEMU launch failed: {e}"
+        bridge.close()
+        try:
+            bridge._shm.unlink()
+        except Exception:
+            pass
+        result.duration = time.time() - start
+        return result
+
+    # Wait for completion or timeout
+    try:
+        stdout, stderr = await asyncio.wait_for(
+            qemu.communicate(), timeout=tc.timeout)
+        result.qemu_exit = qemu.returncode or 0
+        if stderr:
+            result.qemu_stderr = stderr.decode('utf-8', errors='replace')[:500]
+    except asyncio.TimeoutError:
+        qemu.terminate()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                qemu.communicate(), timeout=3)
+            if stderr:
+                result.qemu_stderr = stderr.decode('utf-8', errors='replace')[:500]
+        except asyncio.TimeoutError:
+            qemu.kill()
+            await qemu.wait()
+        result.qemu_exit = 124
+
+    # Collect results
+    result.mmio_count = handler.mmio_count
+    result.duration = time.time() - start
+
+    # Collect UART output
+    if hasattr(board, 'uart_output') and board.uart_output:
+        result.uart_output = board.uart_output.decode('ascii', errors='replace')
+
+    # Determine pass/fail
+    if tc.known_issue:
+        result.passed = False
+        result.error = f"KNOWN: {tc.known_issue}"
+    elif result.mmio_count >= tc.expect_mmio:
+        result.passed = True
+    elif result.error:
+        result.passed = False
+    else:
+        result.error = f"Only {result.mmio_count} MMIO ops (expected >= {tc.expect_mmio})"
+
+    # Cleanup SHM
+    bridge._running = False
+    if bridge._thread:
+        bridge._thread.join(timeout=1.0)
+    try:
+        from multiprocessing import shared_memory as _shm_mod
+        shm_obj = _shm_mod.SharedMemory(name=shm_name, create=False)
+        shm_obj.close()
+        shm_obj.unlink()
+    except Exception:
+        pass
+    bridge.close()
 
     return result
 
@@ -503,6 +675,50 @@ def build_test_cases() -> List[TestCase]:
         ],
     ))
 
+    # =========================================================================
+    # SHM PROXY TESTS (same firmware, SHM transport instead of TCP)
+    # =========================================================================
+    if HAS_SHM:
+        # -- STM32F405 HelloBlink via SHM --
+        tests.append(TestCase(
+            name="STM32F405 HelloBlink [shm]",
+            firmware="slab/examples/cortex-m/stm32/f405/demos/hello_blink/build/HelloBlink.bin",
+            cpu="cortex-m4", mode="shm",
+            board_yaml="slab/boards/stm32f405_hello_blink.yaml",
+            timeout=6, expect_mmio=50,
+        ))
+
+        # -- STM32F405 HelloBlinkUart via SHM --
+        tests.append(TestCase(
+            name="STM32F405 HelloBlinkUart [shm]",
+            firmware="slab/examples/cortex-m/stm32/f405/demos/hello_blink_uart/build/HelloBlinkUart.bin",
+            cpu="cortex-m4", mode="shm",
+            board_yaml="slab/boards/stm32f405_hello_blink.yaml",
+            timeout=6, expect_mmio=50,
+        ))
+
+        # -- STM32F439 Crypto CDC via SHM --
+        tests.append(TestCase(
+            name="STM32F439 Crypto CDC [shm]",
+            firmware="slab/examples/cortex-m/stm32/f439/usb/crypto_cdc/stm32_crypto_cdc.bin",
+            cpu="cortex-m4", mode="shm",
+            board_yaml="slab/boards/stm32f439_crypto_cdc.yaml",
+            timeout=6, expect_mmio=10,
+        ))
+
+        # -- STM32H563 TZ via SHM (TrustZone + SHM causes SIGSEGV in QEMU) --
+        tests.append(TestCase(
+            name="STM32H563 TZ Secure [shm]",
+            firmware="slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin",
+            cpu="cortex-m33", mode="shm",
+            board_yaml="slab/boards/stm32h563_tz.yaml",
+            timeout=10, expect_mmio=20,
+            known_issue="TrustZone + SHM proxy not yet supported",
+            qemu_args=[
+                "-device", "loader,file=slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000,force-raw=on",
+            ],
+        ))
+
     return tests
 
 
@@ -548,7 +764,10 @@ async def main():
         status_line = f"[{i+1}/{len(available_tests)}] {tc.name}"
         print(f"  {status_line}...", end=" ", flush=True)
 
-        result = await run_one_test(tc)
+        if tc.mode == "shm":
+            result = await run_one_test_shm(tc)
+        else:
+            result = await run_one_test(tc)
         results.append(result)
 
         txn_info = ""
