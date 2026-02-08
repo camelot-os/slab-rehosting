@@ -37,6 +37,15 @@ class TestBookReport:
     timestamp: str = ""
     register_summary: List[Dict] = field(default_factory=list)
     peripheral_summary: Dict[str, Dict] = field(default_factory=dict)
+    # Enriched report fields
+    description: str = ""
+    source_snippet: str = ""
+    qemu_command: str = ""
+    qemu_log: str = ""
+    test_mode: str = ""
+    cpu_type: str = ""
+    board_config: str = ""
+    mmio_analysis: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +409,12 @@ def generate_test_book(report: TestBookReport, output_dir: str) -> str:
     sections.append(r"\begin{center}")
     sections.append(r"\begin{tabular}{ll}")
     sections.append(r"\toprule")
+    if report.cpu_type:
+        sections.append(f"CPU Type & \\texttt{{{_escape_latex(report.cpu_type)}}} \\\\")
+    if report.test_mode:
+        sections.append(f"Test Mode & {_escape_latex(report.test_mode)} \\\\")
+    if report.board_config:
+        sections.append(f"Board Config & \\texttt{{{_escape_latex(report.board_config)}}} \\\\")
     sections.append(f"MMIO Operations & {report.mmio_count} \\\\")
     sections.append(f"Device Transactions & {report.device_transactions} \\\\")
     sections.append(f"Duration & {report.duration:.2f}s \\\\")
@@ -408,6 +423,11 @@ def generate_test_book(report: TestBookReport, output_dir: str) -> str:
     sections.append(r"\bottomrule")
     sections.append(r"\end{tabular}")
     sections.append(r"\end{center}")
+
+    # Test description
+    if report.description:
+        sections.append(r"\section{Test Description}")
+        sections.append(_escape_latex(report.description))
 
     # Section 1: Architecture diagram
     sections.append(r"\section{Architecture}")
@@ -431,6 +451,21 @@ def generate_test_book(report: TestBookReport, output_dir: str) -> str:
     if report.run_command:
         sections.append(r"\begin{lstlisting}")
         sections.append(report.run_command)
+        sections.append(r"\end{lstlisting}")
+
+    sections.append(r"\subsection{QEMU Command}")
+    if report.qemu_command:
+        sections.append(r"\begin{lstlisting}[language=bash]")
+        sections.append(report.qemu_command)
+        sections.append(r"\end{lstlisting}")
+    else:
+        sections.append("No QEMU command recorded.")
+
+    # Firmware source code
+    if report.source_snippet:
+        sections.append(r"\section{Firmware Source}")
+        sections.append(r"\begin{lstlisting}[language=C,caption=main.c]")
+        sections.append(_truncate(report.source_snippet, 3000))
         sections.append(r"\end{lstlisting}")
 
     # Section 4: MMIO timeline
@@ -464,6 +499,18 @@ def generate_test_book(report: TestBookReport, output_dir: str) -> str:
         sections.append(r"\section{UART Console Output}")
         sections.append(r"\begin{Verbatim}[fontsize=\small]")
         sections.append(_truncate(report.uart_output))
+        sections.append(r"\end{Verbatim}")
+
+    # MMIO analysis narrative
+    if report.mmio_analysis:
+        sections.append(r"\section{MMIO Analysis}")
+        sections.append(_escape_latex(report.mmio_analysis))
+
+    # QEMU execution log
+    if report.qemu_log:
+        sections.append(r"\section{QEMU Execution Log}")
+        sections.append(r"\begin{Verbatim}[fontsize=\small]")
+        sections.append(_truncate(report.qemu_log))
         sections.append(r"\end{Verbatim}")
 
     # Section 9: Test verdict

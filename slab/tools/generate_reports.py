@@ -53,6 +53,70 @@ logging.basicConfig(
 log = logging.getLogger('ReportGen')
 
 
+def _find_source(firmware_path: str) -> str:
+    """Find and read main.c near the firmware binary."""
+    fw_dir = Path(firmware_path).parent
+    candidates = [
+        fw_dir / "main.c",
+        fw_dir / "Src" / "main.c",
+        fw_dir / "src" / "main.c",
+        fw_dir / "benchmark.c",
+        fw_dir.parent / "Src" / "main.c",
+        fw_dir.parent / "src" / "main.c",
+        fw_dir.parent / "main.c",
+    ]
+    for c in candidates:
+        if c.exists():
+            try:
+                return c.read_text(errors='replace')[:4000]
+            except Exception:
+                pass
+    return ""
+
+
+def _generate_mmio_analysis(tracer, periph_summary, spin_loops) -> str:
+    """Generate a human-readable MMIO analysis."""
+    if not tracer or tracer.count == 0:
+        return ""
+    lines = []
+    lines.append(f"The firmware performed {tracer.count} MMIO operations "
+                 f"across {len(periph_summary)} peripherals.")
+
+    # Top peripherals by access count
+    sorted_periphs = sorted(periph_summary.items(),
+                            key=lambda x: x[1]['reads'] + x[1]['writes'],
+                            reverse=True)
+    if sorted_periphs:
+        top = sorted_periphs[0]
+        total = top[1]['reads'] + top[1]['writes']
+        lines.append(f"The most accessed peripheral was {top[0]} "
+                     f"with {total} operations ({top[1]['reads']} reads, "
+                     f"{top[1]['writes']} writes).")
+
+    # RCC / clock init pattern
+    for pname, data in periph_summary.items():
+        if 'RCC' in pname.upper():
+            lines.append(f"Clock configuration via {pname}: "
+                         f"{data['writes']} register writes detected, "
+                         f"indicating peripheral clock enable sequence.")
+            break
+
+    # Spin loops
+    if spin_loops:
+        lines.append(f"{len(spin_loops)} spin loop(s) detected:")
+        for sl in spin_loops[:5]:
+            lines.append(f"  - {sl.peripheral}.{sl.register}: polled "
+                         f"{sl.count} times (seq {sl.start_seq}-{sl.end_seq})")
+
+    # GPIO activity
+    for pname, data in periph_summary.items():
+        if 'GPIO' in pname.upper() and data['writes'] > 0:
+            lines.append(f"GPIO activity on {pname}: {data['writes']} writes "
+                         f"(LED toggle / pin configuration).")
+
+    return '\n'.join(lines)
+
+
 def collect_report(tc, result) -> TestBookReport:
     """Build a TestBookReport from test case and result."""
     tracer = result.tracer
@@ -82,6 +146,23 @@ def collect_report(tc, result) -> TestBookReport:
         except Exception:
             pass
 
+    # Build description
+    description = (f"Emulation test for {tc.name} running in {tc.mode} mode "
+                   f"on {tc.cpu} ({tc.mcu or 'generic'}).")
+    if tc.mode == "board":
+        description += f" Board configuration: {tc.board_yaml}."
+    if tc.known_issue:
+        description += f" Known issue: {tc.known_issue}."
+
+    # Reconstruct QEMU command line
+    machine_opts = f'slab-cortex-m,cpu-type={tc.cpu},tcp-port=5555'
+    for key, val in tc.qemu_extra.items():
+        machine_opts += f',{key}={val}'
+    qemu_command = (
+        f"qemu-system-arm -M {machine_opts} "
+        f"-kernel {tc.firmware} -nographic -monitor none"
+    )
+
     report = TestBookReport(
         title=tc.name,
         mcu=tc.mcu or tc.cpu,
@@ -103,6 +184,14 @@ def collect_report(tc, result) -> TestBookReport:
         timestamp=datetime.now().isoformat(timespec='seconds'),
         register_summary=register_summary,
         peripheral_summary=periph_summary,
+        description=description,
+        source_snippet=_find_source(str(PROJECT_ROOT / tc.firmware)),
+        qemu_command=qemu_command,
+        qemu_log=result.qemu_stderr,
+        test_mode=tc.mode,
+        cpu_type=tc.cpu,
+        board_config=tc.board_yaml,
+        mmio_analysis=_generate_mmio_analysis(tracer, periph_summary, spin_loops),
     )
     return report
 
