@@ -29,7 +29,7 @@ Usage:
     composer.save('custom_device.svd')
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0 AND Apache-2.0
 """
 
@@ -189,7 +189,7 @@ class SVDDevice:
     name: str = "CustomDevice"
     version: str = "1.0"
     description: str = "Custom device created with SVD Composer"
-    vendor: str = "TwistedWires"
+    vendor: str = "Twisted Wires"
     vendor_id: str = "TW"
     series: str = ""
     license_text: str = "SPDX-License-Identifier: Apache-2.0"

@@ -6,7 +6,7 @@ Allows emulated USB devices to appear on the host system via USBIP.
 Protocol based on Linux kernel USBIP implementation.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

@@ -4,7 +4,7 @@ SLAB Crypto Backend - Unified Cryptographic Operations
 Uses Python cryptography library with fallback to hashlib/hmac.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

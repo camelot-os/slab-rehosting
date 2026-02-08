@@ -5,7 +5,7 @@
  * Uses the Synopsys DesignWare I2C controller.
  *
  * Author: Mathieu Renard <mathieu.renard@twistedwires.io>
- * Copyright (C) 2025 TwistedWires Security Lab
+ * Copyright (C) 2025 Twisted Wires Security Lab
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 

@@ -5,7 +5,7 @@ Tests for board.py, peripheral_adapter.py, board_builder.py, and ci_runner.py
 Run with: pytest tests/test_board_builder.py -v
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import sys

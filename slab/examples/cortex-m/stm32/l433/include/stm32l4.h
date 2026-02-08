@@ -6,7 +6,7 @@
  * STM32L4 uses I2C v2 peripheral (different from STM32F4 I2C v1).
  *
  * Author: Mathieu Renard <mathieu.renard@twistedwires.io>
- * Copyright (C) 2025 TwistedWires Security Lab
+ * Copyright (C) 2025 Twisted Wires Security Lab
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 

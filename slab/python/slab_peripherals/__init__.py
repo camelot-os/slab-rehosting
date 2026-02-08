@@ -9,7 +9,7 @@ Dual-licensed for maximum compatibility:
 - SPDX-License-Identifier: Apache-2.0 OR Apache-2.0
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 
 This file is distributed under a dual license:
   - GPL-3.0-or-later (for GPL-compatible projects)

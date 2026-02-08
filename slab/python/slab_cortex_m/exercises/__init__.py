@@ -5,7 +5,7 @@ MCUemu Cortex-M Exercises
 Hands-on exercises for learning ARM Cortex-M emulation.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

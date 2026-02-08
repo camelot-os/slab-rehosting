@@ -9,7 +9,7 @@ from understanding the MCU registry to running firmware on a fully-configured bo
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
 
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 
 Introduction: The Board Abstraction
 ====================================
@@ -23,13 +23,6 @@ In SLAB, a **board** is a complete hardware configuration that combines:
 
 The board abstraction allows you to define complete embedded systems declaratively using YAML or JSON files,
 which are then assembled into a working emulation environment by the board builder.
-
-.. figure:: ../images/board_architecture.png
-   :alt: Board Architecture
-   :align: center
-   :width: 80%
-
-   Board Architecture: MCU Peripheral Set + External Devices + Memory Layout
 
 
 Step 1: Understanding the MCU Registry
@@ -449,13 +442,15 @@ A scenario YAML references your board configuration:
 
 .. code-block:: yaml
 
-   name: SPI Flash Test
-   board: boards/stm32f405_spi_flash.yaml
-   firmware: firmware/spi_flash_test.elf
-   timeout: 10.0
-   checks:
-     - type: uart_output
-       contains: "Flash ID: 0xEF4018"
+   scenarios:
+     - name: "SPI Flash Test"
+       board: slab/boards/stm32f405_spi_flash.yaml
+       firmware: slab/examples/.../spi_flash_test.bin
+       timeout: 10
+       assertions:
+         - type: no_crash
+         - type: mmio_count
+           params: {min: 50}
 
 Using the E2E Test Runner
 --------------------------
@@ -488,8 +483,8 @@ For interactive debugging, load your board in Python:
    print(f"Peripherals: {len(board.adapter.peripherals)}")
    print(f"External devices: {len(board.external_devices)}")
 
-   # Read/write memory-mapped registers
-   rcc_cr = board.read(0x40023800, 4)  # STM32F4 RCC CR register
+   # Read/write memory-mapped registers (returns (value, status) tuple)
+   rcc_cr, _ = board.read(0x40023800, 4, 0)  # STM32F4 RCC CR register
    print(f"RCC CR: 0x{rcc_cr:08X}")
 
 

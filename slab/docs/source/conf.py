@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath('../../python'))
 # -- Project information -----------------------------------------------------
 
 project = 'MCUemu'
-copyright = f'{datetime.now().year}, TwistedWires Security Lab'
+copyright = f'{datetime.now().year}, Twisted Wires Security Lab'
 author = 'Mathieu Renard'
 release = '1.0.0'
 version = '1.0'

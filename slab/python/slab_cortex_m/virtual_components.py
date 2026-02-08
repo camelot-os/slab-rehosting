@@ -22,7 +22,7 @@ Display Controllers:
 All components implement proper register maps and timing behavior.
 """
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (C) 2026 TwistedWires - Mathieu Renard
+# Copyright (C) 2026 Twisted Wires - Mathieu Renard
 
 import struct
 import time

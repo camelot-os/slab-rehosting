@@ -5,7 +5,7 @@ Firmware Emulation Integration Test
 Tests CubeMX and FreeRTOS firmware with full peripheral emulation.
 Monitors GPIO accesses to validate peripheral interactions.
 
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: GPL-2.0-or-later
 """
 

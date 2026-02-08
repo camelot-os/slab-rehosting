@@ -4,7 +4,7 @@ SLAB GUI Framebuffer Display Widget
 Displays raw framebuffer data from emulated GPU or display controller.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

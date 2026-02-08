@@ -144,9 +144,9 @@ Academic References
 Copyright
 =========
 
-MCUemu is developed by TwistedWires Security Lab.
+MCUemu is developed by Twisted Wires Security Lab.
 
-Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
 
 The QEMU machine code (``qemu/hw/``) is licensed under GPL-3.0-or-later.
 

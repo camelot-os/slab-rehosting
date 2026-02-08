@@ -17,7 +17,7 @@ Run:
     python3 tests/firmware/examples/stm32_crypto_cdc/test_e2e_usb_cdc_crypto.py
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

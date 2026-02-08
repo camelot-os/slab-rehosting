@@ -7,7 +7,7 @@ Handles the binary protocol shared by all SoC servers:
   IRQ:      [I:1][IRQ#:4][Level:1]
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

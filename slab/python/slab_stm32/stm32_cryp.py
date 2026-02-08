@@ -8,7 +8,7 @@ Supports:
 Register layout follows STM32F4 reference manual (RM0090).
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

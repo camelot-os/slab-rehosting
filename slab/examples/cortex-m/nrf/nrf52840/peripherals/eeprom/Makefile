@@ -1,7 +1,7 @@
 # NRF52840 I2C EEPROM Test Firmware Makefile
 #
 # Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-# Copyright (C) 2025 TwistedWires Security Lab
+# Copyright (C) 2025 Twisted Wires Security Lab
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 TARGET = nrf52840_eeprom_test

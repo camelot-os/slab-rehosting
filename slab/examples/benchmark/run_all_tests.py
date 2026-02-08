@@ -8,7 +8,7 @@ Runs all CDC-based peripheral tests across all supported MCU families:
 - RP2040: I2C EEPROM
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

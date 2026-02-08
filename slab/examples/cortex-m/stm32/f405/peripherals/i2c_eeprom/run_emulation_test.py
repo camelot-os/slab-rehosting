@@ -6,7 +6,7 @@ This test actually runs the compiled firmware in QEMU with the mcuemu machine,
 connecting a virtual 24C256 EEPROM and communicating via CDC.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

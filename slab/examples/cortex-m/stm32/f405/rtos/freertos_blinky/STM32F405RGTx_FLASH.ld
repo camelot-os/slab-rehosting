@@ -6,7 +6,7 @@
  *   SRAM:  128KB at 0x20000000
  *   CCM:   64KB at 0x10000000
  *
- * Copyright (C) 2025 TwistedWires Security Lab
+ * Copyright (C) 2025 Twisted Wires Security Lab
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 

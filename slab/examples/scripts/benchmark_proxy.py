@@ -6,7 +6,7 @@ Compares latency and throughput of TCP and shared memory peripheral proxies.
 Measures MMIO access performance critical for MCU firmware rehosting.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: GPL-2.0-or-later
 """
 

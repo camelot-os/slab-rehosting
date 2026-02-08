@@ -17,7 +17,7 @@ Registers (at 0xE000ED90):
 - MPU_RBAR_A1-A3 (0xE000EDA4-0xE000EDBC): Alias registers
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

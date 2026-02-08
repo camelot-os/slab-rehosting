@@ -6,7 +6,7 @@ High-performance peripheral communication via POSIX shared memory.
 Lower latency than TCP for local emulation.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

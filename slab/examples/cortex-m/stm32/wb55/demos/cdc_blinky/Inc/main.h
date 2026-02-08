@@ -4,7 +4,7 @@
   * Uses native WB55 HAL for all peripherals (RCC, GPIO, TIM, PCD).
   * USB CDC uses WB55 PMA-based USB FS peripheral.
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #ifndef __MAIN_H
 #define __MAIN_H

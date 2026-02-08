@@ -12,7 +12,7 @@ Provides common infrastructure for all USB controller emulations:
 Based on Synopsys DWC2 OTG v3.30a datasheet and DWC3 specifications.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025-2026 TwistedWires Security Lab
+Copyright (C) 2025-2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

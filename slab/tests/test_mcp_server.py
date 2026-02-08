@@ -5,7 +5,7 @@ Tests the Model Context Protocol server implementation including
 tools, resources, prompts, and protocol handling.
 """
 # SPDX-License-Identifier: Apache-2.0
-# Copyright (C) 2026 TwistedWires - Mathieu Renard
+# Copyright (C) 2026 Twisted Wires - Mathieu Renard
 
 import asyncio
 import json

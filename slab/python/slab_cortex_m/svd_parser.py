@@ -25,7 +25,7 @@ Usage:
     reg_info = device.get_register_info(0x40020000)  # Returns GPIO info
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

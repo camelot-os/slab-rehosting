@@ -7,10 +7,10 @@ Uses raw socket communication to verify USBIP protocol compliance and
 CDC-ACM device functionality.
 
 Run:
-    PYTHONPATH=python pytest tests/test_usbip_cdc.py -v
+    PYTHONPATH=slab/python pytest slab/tests/test_usbip_cdc.py -v
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import asyncio
@@ -116,7 +116,7 @@ class TestCDCACMDevice:
         # String 1: Manufacturer
         mfr = dev.get_string_desc(1)
         assert mfr[1] == 0x03
-        assert b"TwistedWires" in mfr[2:].decode('utf-16-le', errors='ignore').encode()
+        assert b"Twisted Wires" in mfr[2:].decode('utf-16-le', errors='ignore').encode()
 
     def test_set_address(self):
         dev = CDCACMDevice()

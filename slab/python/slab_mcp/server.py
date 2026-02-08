@@ -5,7 +5,7 @@ Slab MCP Server
 Model Context Protocol server implementation with automatic capability discovery.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

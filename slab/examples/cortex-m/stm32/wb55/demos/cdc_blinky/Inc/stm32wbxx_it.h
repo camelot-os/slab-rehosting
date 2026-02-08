@@ -1,7 +1,7 @@
 /**
   * Interrupt handlers header for STM32WB55 CDC Blinky
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #ifndef __STM32WBxx_IT_H
 #define __STM32WBxx_IT_H

@@ -31,7 +31,7 @@ Register Map (based on nRF52840 Product Specification):
     0x63C: CINSTRDAT1        - Custom instruction data 1
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

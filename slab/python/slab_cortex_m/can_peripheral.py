@@ -31,7 +31,7 @@ Usage:
     can.write_reg(CANController.TI0R, 0x123 << 21 | 1)  # Request TX
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import struct

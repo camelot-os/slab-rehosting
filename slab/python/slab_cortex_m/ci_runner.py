@@ -15,7 +15,7 @@ Usage:
     python3 -m slab_cortex_m.ci_runner --scenario test.yaml --output results.json
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 
@@ -223,9 +223,12 @@ class CIRunner:
 
             # Build QEMU command
             cpu = get_qemu_cpu(board_config)
+            machine_opts = f'slab-cortex-m,cpu-type={cpu},tcp-port={port}'
+            for k, v in board_config.qemu_extra.items():
+                machine_opts += f',{k}={v}'
             cmd = [
                 self.qemu_bin,
-                '-M', f'slab-cortex-m,cpu-type={cpu},tcp-port={port}',
+                '-M', machine_opts,
                 '-kernel', scenario.firmware,
                 '-nographic', '-monitor', 'none',
             ] + scenario.qemu_args

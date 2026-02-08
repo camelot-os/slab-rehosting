@@ -10,7 +10,7 @@ Tests three USB controller architectures:
 Captures full server + QEMU logs for report generation.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import asyncio

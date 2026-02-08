@@ -6,7 +6,7 @@ Dual-core architecture:
 - Network core: Cortex-M33 @ 64 MHz (BLE/802.15.4)
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

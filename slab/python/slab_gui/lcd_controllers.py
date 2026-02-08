@@ -12,7 +12,7 @@ These controllers communicate via SPI/I2C and use command/data mode
 controlled by the D/C (Data/Command) pin.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

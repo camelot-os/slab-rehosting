@@ -53,7 +53,7 @@ Usage:
         flash     - SPI Flash emulation
 
 SPDX-License-Identifier: GPL-2.0-or-later
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 """
 
 import argparse
@@ -434,7 +434,7 @@ def demo_usb():
 
     # Create virtual CDC device
     device = create_cdc_acm_device(vid=0x1234, pid=0x5678)
-    device.manufacturer = "TwistedWires"
+    device.manufacturer = "Twisted Wires"
     device.product = "Slab Virtual Serial"
     device.serial = "SLAB-001"
 

@@ -2,7 +2,7 @@
 """
 MCUemu SLAB - Software Lab for ARM/Cortex-M Peripheral Emulation
 
-Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
 """
 
 from setuptools import setup, find_packages
@@ -13,7 +13,7 @@ setup(
     description="Peripheral emulation library for Cortex-M microcontrollers",
     long_description=open("../README.md").read(),
     long_description_content_type="text/markdown",
-    author="TwistedWires Security Lab",
+    author="Twisted Wires Security Lab",
     author_email="contact@twistedwires.io",
     url="https://github.com/twistedwires/mcuemu",
     packages=find_packages(),

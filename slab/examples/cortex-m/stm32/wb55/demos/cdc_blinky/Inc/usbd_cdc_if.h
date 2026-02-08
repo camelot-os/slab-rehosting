@@ -1,7 +1,7 @@
 /**
   * USB CDC interface header
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #ifndef __USBD_CDC_IF_H__
 #define __USBD_CDC_IF_H__

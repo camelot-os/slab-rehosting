@@ -10,7 +10,7 @@ A professional-grade debug interface for MCU emulation with:
 - Sigrok-compatible export (VCD, .sr)
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

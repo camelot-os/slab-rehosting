@@ -1,7 +1,7 @@
 # Makefile for Sphinx documentation
 #
 # MCUemu Documentation Build
-# Copyright (C) 2026 TwistedWires Security Lab
+# Copyright (C) 2026 Twisted Wires Security Lab
 
 SPHINXOPTS    ?= -W --keep-going
 SPHINXBUILD   ?= sphinx-build

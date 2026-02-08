@@ -1,7 +1,7 @@
 /**
   * Interrupt handlers for STM32WB55 CDC Blinky
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #include "main.h"
 #include "stm32wbxx_it.h"

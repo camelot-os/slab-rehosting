@@ -20,7 +20,7 @@
  *   M4 (240 MHz): Coprocessor handling IPC commands, D2 domain
  *
  * Author: Mathieu Renard <mathieu.renard@twistedwires.io>
- * Copyright (C) 2025 TwistedWires Security Lab
+ * Copyright (C) 2025 Twisted Wires Security Lab
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 

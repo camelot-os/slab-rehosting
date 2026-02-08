@@ -47,7 +47,7 @@ Architecture:
     └─────────────────────────────────────────────────────────────┘
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import socket
@@ -2460,7 +2460,7 @@ def create_cdc_acm_device(vid: int = 0x1234, pid: int = 0x5678) -> USBDevice:
         device_class=0x02,  # CDC
         device_subclass=0x00,
         device_protocol=0x00,
-        manufacturer="TwistedWires",
+        manufacturer="Twisted Wires",
         product="Slab Virtual Serial",
         serial="SLAB001",
         endpoints=[
@@ -2479,7 +2479,7 @@ def create_hid_keyboard_device(vid: int = 0x1234, pid: int = 0x5679) -> USBDevic
         device_class=0x00,  # Defined at interface level
         device_subclass=0x00,
         device_protocol=0x00,
-        manufacturer="TwistedWires",
+        manufacturer="Twisted Wires",
         product="Slab Virtual Keyboard",
         serial="SLABKBD001",
         endpoints=[
@@ -2496,7 +2496,7 @@ def create_mass_storage_device(vid: int = 0x1234, pid: int = 0x567A) -> USBDevic
         device_class=0x00,
         device_subclass=0x00,
         device_protocol=0x00,
-        manufacturer="TwistedWires",
+        manufacturer="Twisted Wires",
         product="Slab Virtual Storage",
         serial="SLABMSC001",
         endpoints=[

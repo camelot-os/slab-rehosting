@@ -5,7 +5,7 @@ MCUemu Test Peripheral Server
 This server emulates peripherals for the MCUemu test firmware.
 It implements the binary protocol to communicate with QEMU.
 
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

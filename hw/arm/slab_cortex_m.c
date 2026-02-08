@@ -20,26 +20,22 @@
  *
  * Usage:
  *   # Single core ARMv7-M with TCP proxy
- *   qemu-system-arm -M slab-cortex-m \
- *     -global slab-cortex-m.cpu-type=cortex-m4 \
- *     -global slab-cortex-m.tcp-port=5555 \
- *     -kernel firmware.bin
+ *   qemu-system-arm \
+ *     -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
+ *     -kernel firmware.bin -nographic
  *
  *   # With shared memory (lower latency)
- *   qemu-system-arm -M slab-cortex-m \
- *     -global slab-cortex-m.cpu-type=cortex-m4 \
- *     -global slab-cortex-m.shm-name=/slab_periph \
- *     -kernel firmware.bin
+ *   qemu-system-arm \
+ *     -M slab-cortex-m,cpu-type=cortex-m4,shm-name=/slab_periph \
+ *     -kernel firmware.bin -nographic
  *
  *   # Dual-Core with TrustZone
- *   qemu-system-arm -M slab-cortex-m \
- *     -global slab-cortex-m.cpu-type=cortex-m33 \
- *     -global slab-cortex-m.dual-core=true \
- *     -global slab-cortex-m.trustzone=true \
- *     -kernel secure_firmware.bin
+ *   qemu-system-arm \
+ *     -M slab-cortex-m,cpu-type=cortex-m33,dual-core=true,trustzone=on \
+ *     -kernel secure_firmware.bin -nographic
  *
  * Author: Mathieu Renard <mathieu.renard@twistedwires.io>
- * Copyright (C) 2025 TwistedWires Security Lab
+ * Copyright (C) 2026 Twisted Wires Security Lab
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 
@@ -983,20 +979,20 @@ static void slab_cortex_m_init(MachineState *machine)
     info_report("  CPU:         %s", s->cpu_type);
     info_report("  Architecture:%s",
                 is_armv8m ? "ARMv8-M (TrustZone capable)" : "ARMv6-M/ARMv7-M");
-    info_report("  Flash:       0x%08X - 0x%08X (%d KB)",
+    info_report("  Flash:       0x%08x - 0x%08x (%u KB)",
                 s->flash_base, s->flash_base + s->flash_size - 1,
                 s->flash_size / 1024);
-    info_report("  SRAM:        0x%08X - 0x%08X (%d KB)",
+    info_report("  SRAM:        0x%08x - 0x%08x (%u KB)",
                 s->sram_base, s->sram_base + s->sram_size - 1,
                 s->sram_size / 1024);
-    info_report("  Peripherals: 0x%08X - 0x%08X",
+    info_report("  Peripherals: 0x%08x - 0x%08x",
                 s->periph_base, s->periph_base + s->periph_size - 1);
     info_report("  TCP Port:    %d", s->tcp_port);
     if (s->shm_name && strlen(s->shm_name) > 0) {
         info_report("  Shared Mem:  %s", s->shm_name);
     }
-    info_report("  IRQs:        %d", s->num_irqs);
-    info_report("  Clock:       %d Hz", s->sysclk_hz);
+    info_report("  IRQs:        %u", s->num_irqs);
+    info_report("  Clock:       %u Hz", s->sysclk_hz);
     info_report("================================================================");
 
     /* Create system clock */
@@ -1056,7 +1052,7 @@ static void slab_cortex_m_init(MachineState *machine)
                                s->ns_flash_size, &error_fatal);
         memory_region_add_subregion(get_system_memory(),
                                     s->ns_flash_base, &s->ns_flash);
-        info_report("  NS Flash:    0x%08X - 0x%08X (%d KB)",
+        info_report("  NS Flash:    0x%08x - 0x%08x (%u KB)",
                     s->ns_flash_base,
                     s->ns_flash_base + s->ns_flash_size - 1,
                     s->ns_flash_size / 1024);

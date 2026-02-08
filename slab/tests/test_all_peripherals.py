@@ -8,7 +8,7 @@ and compatibility with real STM32 firmware.
 Run with: pytest tests/test_all_peripherals.py -v
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import sys

@@ -515,4 +515,4 @@ Next Steps
 
 **Author**: Mathieu Renard <mathieu.renard@twistedwires.io>
 
-**Copyright**: (C) 2026 TwistedWires Security Lab
+**Copyright**: (C) 2026 Twisted Wires Security Lab

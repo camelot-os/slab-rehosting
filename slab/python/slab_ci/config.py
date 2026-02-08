@@ -6,7 +6,7 @@ Users can specify which interfaces to test and which code sections are
 expected to be vulnerable to various attacks.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

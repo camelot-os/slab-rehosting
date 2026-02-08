@@ -1,0 +1,9 @@
+scenarios:
+  - name: "STM32H563 TrustZone dual-image boot"
+    board: slab/boards/stm32h563_tz.yaml
+    firmware: slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin
+    timeout: 10
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 100}

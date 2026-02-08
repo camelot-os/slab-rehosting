@@ -6,7 +6,7 @@
   *
   * Based on STM32CubeWB CDC_Standalone/USB_Device/Target/usbd_conf.c
   * Copyright (c) 2019-2021 STMicroelectronics. (original template)
-  * Copyright (C) 2026 TwistedWires Security Lab. (adaptation)
+  * Copyright (C) 2026 Twisted Wires Security Lab. (adaptation)
   */
 #include "main.h"
 #include "stm32wbxx.h"

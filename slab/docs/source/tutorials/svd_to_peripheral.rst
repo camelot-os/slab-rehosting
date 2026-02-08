@@ -113,14 +113,15 @@ Output:
 
    Device: ARMCM4
    CPU: CM4
-   FPU: Yes
-   Peripherals: 15
-     SysTick      @ 0xE000E010 (4 regs)
-     NVIC         @ 0xE000E100 (68 regs)
-     SCB          @ 0xE000ED00 (18 regs)
-     SPI1         @ 0x40010000 (8 regs)
-     UART0        @ 0x40011000 (6 regs)
-     ...
+   FPU: No
+   Peripherals: 0
+
+.. note::
+
+   The ARM reference SVDs (ARMCM4.svd, etc.) define only the CPU core, not vendor-specific
+   peripherals. To get peripheral definitions (SPI, UART, GPIO, etc.), use a vendor SVD
+   such as ``STM32F4xx.svd`` from STMicroelectronics or ``nrf52840.svd`` from Nordic.
+   The subsequent code examples in this tutorial assume a vendor SVD with peripheral definitions.
 
 Accessing Peripheral Information
 ---------------------------------
@@ -627,4 +628,4 @@ Next Steps
 
    Author: Mathieu Renard <mathieu.renard@twistedwires.io>
 
-   Copyright (C) 2026 TwistedWires Security Lab
+   Copyright (C) 2026 Twisted Wires Security Lab

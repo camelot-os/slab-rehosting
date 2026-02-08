@@ -10,7 +10,7 @@ Measures performance metrics for each supported MCU family:
 - DMA transfer rates (where applicable)
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

@@ -20,7 +20,7 @@ Usage:
     pytest tests/test_shm_tcp_interfaces.py -k "shm" -v
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import sys

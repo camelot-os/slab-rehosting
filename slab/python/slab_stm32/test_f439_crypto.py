@@ -5,7 +5,7 @@ Tests for CRYP (AES, DES, TDES) and HASH (MD5, SHA-1, SHA-224, SHA-256) peripher
 Uses NIST test vectors for validation.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

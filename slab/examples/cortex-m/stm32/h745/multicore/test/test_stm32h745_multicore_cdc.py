@@ -17,7 +17,7 @@ Architecture:
     M4 @ 240 MHz: Real-time coprocessor (D2 domain)
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

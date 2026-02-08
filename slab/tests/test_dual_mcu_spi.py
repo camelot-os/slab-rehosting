@@ -35,8 +35,8 @@ Response format:
 Usage:
     python3 test_dual_mcu_spi.py
 
-Author: TwistedWires Security Lab
-Copyright (C) 2026 TwistedWires Security Lab
+Author: Twisted Wires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

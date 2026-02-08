@@ -14,7 +14,7 @@ capabilities, enabling seamless transition from hardware capture to attack.
 Reference: https://github.com/Ledger-Donjon/lascar
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

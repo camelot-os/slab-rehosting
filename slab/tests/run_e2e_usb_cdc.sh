@@ -13,7 +13,7 @@
 #   ./tests/run_e2e_usb_cdc.sh              # Full E2E with QEMU
 #   ./tests/run_e2e_usb_cdc.sh --python-only  # USBIP standalone (no QEMU)
 #
-# Copyright (C) 2026 TwistedWires - Mathieu Renard
+# Copyright (C) 2026 Twisted Wires - Mathieu Renard
 # SPDX-License-Identifier: Apache-2.0
 
 set -e

@@ -6,7 +6,7 @@ Tests the CRYP and HASH peripherals by simulating firmware register access.
 This validates the Python peripheral implementation matches what firmware would see.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

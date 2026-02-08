@@ -50,7 +50,7 @@ Usage:
     python3 usb_otg_demo.py selftest
 
 SPDX-License-Identifier: GPL-2.0-or-later
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 """
 
 import argparse
@@ -109,7 +109,7 @@ Steps:
         vid=0x1234,
         pid=0x5678
     )
-    device.manufacturer = "TwistedWires"
+    device.manufacturer = "Twisted Wires"
     device.product = "Slab Virtual Serial"
     device.serial = "SLAB-CDC-001"
 

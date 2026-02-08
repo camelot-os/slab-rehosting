@@ -19,7 +19,7 @@ Memory Map:
 0x4000E048 - POST_TRIGGER  (R)  Last triggered POST code
 0x4000E04C - POST_CYCLE    (R)  Cycle count at last POST
 
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

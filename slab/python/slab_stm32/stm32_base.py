@@ -4,7 +4,7 @@ STM32 Peripheral Base Classes
 Provides the base class for all STM32 peripheral emulation.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

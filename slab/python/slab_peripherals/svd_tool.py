@@ -12,7 +12,7 @@ Usage:
     svd_tool.py peripheralset <svd_file> -o out.py # Generate PeripheralSet
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 
@@ -187,7 +187,7 @@ def generate_peripheral_module(
         f'{device.name} Peripherals - Auto-generated from SVD',
         '',
         'Author: Mathieu Renard <mathieu.renard@twistedwires.io>',
-        'Copyright (C) 2026 TwistedWires Security Lab',
+        'Copyright (C) 2026 Twisted Wires Security Lab',
         'SPDX-License-Identifier: Apache-2.0',
         '"""',
         '',
@@ -289,7 +289,7 @@ def generate_peripheral_set(device: SVDDevice, class_name: str, family: str) -> 
         f'{device.name} Peripheral Set - Auto-generated from SVD',
         '',
         'Author: Mathieu Renard <mathieu.renard@twistedwires.io>',
-        'Copyright (C) 2026 TwistedWires Security Lab',
+        'Copyright (C) 2026 Twisted Wires Security Lab',
         'SPDX-License-Identifier: Apache-2.0',
         '"""',
         '',

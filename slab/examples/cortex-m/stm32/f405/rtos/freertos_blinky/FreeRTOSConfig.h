@@ -1,7 +1,7 @@
 /**
  * FreeRTOS Configuration for MCUemu Testing
  *
- * Copyright (C) 2025 TwistedWires Security Lab
+ * Copyright (C) 2025 Twisted Wires Security Lab
  * SPDX-License-Identifier: GPL-2.0-or-later
  */
 

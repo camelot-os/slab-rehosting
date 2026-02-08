@@ -5,7 +5,7 @@
   * Configures FPU, resets RCC to MSI 4MHz default.
   *
   * Copyright (c) 2019-2021 STMicroelectronics. (original template)
-  * Copyright (C) 2026 TwistedWires Security Lab. (adaptation)
+  * Copyright (C) 2026 Twisted Wires Security Lab. (adaptation)
   */
 #include "stm32wbxx.h"
 

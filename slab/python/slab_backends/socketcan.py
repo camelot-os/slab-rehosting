@@ -4,7 +4,7 @@ SLAB SocketCAN Backend - CAN Bus Interface
 Connects emulated CAN peripherals to Linux SocketCAN interface.
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

@@ -6,7 +6,7 @@
 # Core SDKs (STM32CubeF4, CMSIS_5, FreeRTOS-Kernel) are tracked as git
 # submodules under slab/examples/repos/.
 #
-# Copyright (C) 2025 TwistedWires Security Lab
+# Copyright (C) 2025 Twisted Wires Security Lab
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 set -e

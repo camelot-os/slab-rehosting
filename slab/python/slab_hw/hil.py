@@ -11,7 +11,7 @@ Supported debuggers:
 - Custom serial protocols
 
 SPDX-License-Identifier: Apache-2.0 OR Apache-2.0
-Copyright (C) 2025 TwistedWires Security Lab
+Copyright (C) 2025 Twisted Wires Security Lab
 """
 
 import os

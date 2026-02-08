@@ -4,7 +4,7 @@
   * This header is included by the USB middleware (usbd_core.h).
   * Uses native STM32WBxx HAL PCD driver for USB FS peripheral.
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #ifndef __USBD_CONF__H__
 #define __USBD_CONF__H__

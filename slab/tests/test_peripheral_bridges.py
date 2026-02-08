@@ -7,8 +7,8 @@ Tests:
 2. CAN Bridge -> SocketCAN/Scapy
 3. Bluetooth Bridge -> HCI
 
-Author: TwistedWires Security Lab
-Copyright (C) 2026 TwistedWires Security Lab
+Author: Twisted Wires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

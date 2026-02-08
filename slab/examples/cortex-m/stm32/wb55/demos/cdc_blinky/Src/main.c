@@ -9,7 +9,7 @@
   *
   * Target: STM32WB55 (Cortex-M4 @ 64 MHz, USB FS)
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #include "main.h"
 #include "usb_device.h"

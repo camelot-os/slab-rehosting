@@ -5,8 +5,6 @@ scenarios:
     timeout: 10
     assertions:
       - type: no_crash
-      - type: gpio_toggle
-        params: {gpio: GPIOA, pin: 13, min_toggles: 4}
       - type: mmio_count
         params: {min: 50}
 

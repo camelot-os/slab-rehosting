@@ -16,7 +16,7 @@ Usage:
     python3 usbip_repl.py [--host HOST] [--port PORT]
 
 SPDX-License-Identifier: Apache-2.0
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 """
 
 import cmd

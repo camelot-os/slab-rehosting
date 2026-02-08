@@ -10,7 +10,7 @@ assertions, generate machine-readable reports, and integrate with GitHub Actions
 
 **Author:** Mathieu Renard <mathieu.renard@twistedwires.io>
 
-**Copyright:** (C) 2026 TwistedWires Security Lab
+**Copyright:** (C) 2026 Twisted Wires Security Lab
 
 CI Testing Philosophy
 =====================
@@ -48,25 +48,20 @@ Step 1: Writing a CI Scenario YAML
 
 Create a test scenario file describing the firmware under test and expected behavior.
 
-Example: ``slab/ci/test_spi_flash.yaml``
+Example: ``slab/ci/test_hello_blink.yaml``
 
 .. code-block:: yaml
 
    scenarios:
-     - name: "STM32F405 SPI Flash Test"
-       board: slab/boards/stm32f405_spi_flash.yaml
-       firmware: slab/examples/cortex-m/stm32/f405/demos/spi_flash/build/SpiFlash.bin
+     - name: "STM32F405 LED blink"
+       board: slab/boards/stm32f405_hello_blink.yaml
+       firmware: slab/examples/cortex-m/stm32/f405/demos/hello_blink/build/HelloBlink.bin
        timeout: 10
        assertions:
          - type: no_crash
          - type: mmio_count
            params:
              min: 50
-         - type: gpio_toggle
-           params:
-             gpio: GPIOA
-             pin: 13
-             min_toggles: 4
 
 **Field Explanations:**
 
@@ -197,17 +192,15 @@ Test one scenario file:
 
 Output::
 
-   [INFO] Running scenario: STM32F405 LED blink
-   [INFO] Board: slab/boards/stm32f405_hello_blink.yaml
-   [INFO] Firmware: slab/examples/.../HelloBlink.bin
-   [INFO] Starting peripheral server on port 5555...
-   [INFO] Starting QEMU (timeout: 10s)...
-   [INFO] QEMU exit code: 124 (timeout)
-   [INFO] Assertions:
-   [PASS] no_crash (QEMU exit code: 124)
-   [PASS] gpio_toggle (GPIOA.13: 12 toggles >= 4)
-   [PASS] mmio_count (142 ops >= 50)
-   [INFO] RESULT: PASSED (3/3 assertions)
+   [INFO] Running 2 scenario(s)
+   [INFO] Running: STM32F405 LED blink
+   [INFO] [STM32F405 LED blink] Starting QEMU: .../qemu-system-arm...
+   [INFO]   PASS (10.0s, 222 MMIO ops)
+   [INFO]     [+] no_crash: QEMU exit code: 0
+   [INFO]     [+] mmio_count(>=50): count=222
+   [INFO] Running: STM32F405 HelloBlinkUart
+   [INFO]   PASS (10.0s, 237 MMIO ops)
+   [INFO] RESULTS: 2/2 passed
 
 Batch Mode
 ----------
@@ -578,8 +571,6 @@ Combine multiple assertions for robust validation:
      - type: no_crash           # Firmware didn't fault
      - type: mmio_count         # Reached main loop
        params: {min: 100}
-     - type: gpio_toggle        # Application logic ran
-       params: {gpio: GPIOA, pin: 13, min_toggles: 4}
 
 **4. MMIO Threshold Tuning**
 
@@ -595,7 +586,7 @@ Next Steps
 
 - :ref:`debugging_bootloops` - Fix tests that hang during boot
 - :ref:`stubbing_peripherals` - Create custom peripheral stubs for complex devices
-- ``slab/ci/`` - Explore existing test scenarios
+- ``slab/ci/`` - Browse existing test scenarios (``test_hello_blink.yaml``, ``test_h563_tz.yaml``)
 
 **Further Reading:**
 

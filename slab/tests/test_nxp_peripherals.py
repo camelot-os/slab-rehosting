@@ -9,8 +9,8 @@ References:
 - UM11126: LPC55S6x/LPC55S2x/LPC552x User Manual
 - LPC55S69 Datasheet
 
-Author: TwistedWires Security Lab
-Copyright (C) 2026 TwistedWires Security Lab
+Author: Twisted Wires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 

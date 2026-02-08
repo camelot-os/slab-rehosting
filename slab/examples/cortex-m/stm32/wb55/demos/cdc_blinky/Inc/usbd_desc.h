@@ -1,7 +1,7 @@
 /**
   * USB Device descriptor header for STM32WB55
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #ifndef __USBD_DESC_H
 #define __USBD_DESC_H

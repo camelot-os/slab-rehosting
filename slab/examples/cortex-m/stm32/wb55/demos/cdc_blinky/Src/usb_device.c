@@ -5,7 +5,7 @@
   * - Initializes USB Device core + CDC class
   * - Provides usb_send_hello() for initial "helloworld" message
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #include "main.h"
 #include "usbd_core.h"

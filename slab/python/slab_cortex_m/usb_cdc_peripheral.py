@@ -11,7 +11,7 @@ The emulation handles:
 - CDC-ACM data transfer (echo mode for testing)
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 
@@ -203,7 +203,7 @@ class USBCDCDescriptors:
 
     # String descriptors
     STRING_LANGID = bytes([4, 0x03, 0x09, 0x04])  # English (US)
-    STRING_MANUFACTURER = "TwistedWires".encode('utf-16-le')
+    STRING_MANUFACTURER = "Twisted Wires".encode('utf-16-le')
     STRING_PRODUCT = "MCUemu CDC-ACM".encode('utf-16-le')
     STRING_SERIAL = "000001".encode('utf-16-le')
 

@@ -22,7 +22,7 @@ Usage:
     sudo usbip attach -r localhost -b 1-1
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-Copyright (C) 2026 TwistedWires Security Lab
+Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 
@@ -236,7 +236,7 @@ class CDCACMDevice:
         """Get string descriptor."""
         strings = [
             self.STRING_LANGID,
-            "TwistedWires".encode('utf-16-le'),
+            "Twisted Wires".encode('utf-16-le'),
             "MCUemu CDC-ACM".encode('utf-16-le'),
             "000001".encode('utf-16-le'),
         ]

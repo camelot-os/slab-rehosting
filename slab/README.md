@@ -2,7 +2,7 @@
 
 **SLAB** (Security Lab) Cortex-M is a QEMU-based platform for ARM Cortex-M firmware emulation with Python peripheral control. It enables firmware testing, security research, and peripheral prototyping without custom QEMU recompilation.
 
-Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
 
 ---
 
@@ -104,7 +104,7 @@ examples/cortex-m/stm32/f439/usb/crypto_cdc/
 
 ```bash
 # Start emulation with USB
-python3 tests/firmware/examples/stm32_crypto_cdc/test_e2e_crypto.py
+PYTHONPATH=slab/python python3 slab/examples/cortex-m/stm32/f439/usb/crypto_cdc/test_e2e_crypto.py
 ```
 
 ### STM32H563 TrustZone
@@ -130,13 +130,13 @@ examples/cortex-m/stm32/h563/stm32h563_tz_cdc/
 - ThreadX RTOS in Non-Secure world
 - USB CDC over TrustZone boundary
 
-**Run the emulation:**
+**Run the emulation (with peripheral server on port 5555):**
 
 ```bash
 ./build/qemu-system-arm \
-    -M slab-cortex-m,cpu-type=cortex-m33,flash-base=0x0C000000,sram-base=0x30000000,sram-size=0xa0000,trustzone=on \
+    -M slab-cortex-m,cpu-type=cortex-m33,tcp-port=5555,flash-base=0x0C000000,sram-base=0x30000000,sram-size=0x50000,trustzone=on,sysclk-hz=250000000,ns-flash-base=0x08040000,ns-flash-size=0x1C0000 \
     -kernel slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/secure_fw.bin \
-    -device loader,file=slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000 \
+    -device loader,file=slab/examples/cortex-m/stm32/h563/stm32h563_tz_cdc/build/nonsecure_fw.bin,addr=0x08042000,force-raw=on \
     -nographic
 ```
 
@@ -203,10 +203,10 @@ make html
 
 ## Debug Dashboard
 
-MCUemu includes a professional debug dashboard:
+MCUemu includes a professional debug dashboard (requires ``pygame``):
 
 ```bash
-python3 /tmp/test_dashboard_pro.py
+PYTHONPATH=slab/python python3 -m slab_gui.debug_dashboard
 ```
 
 **Features:**
@@ -236,20 +236,20 @@ python3 /tmp/test_dashboard_pro.py
 PYTHONPATH=slab/python pytest slab/tests/ -v
 
 # Run specific test suites
-pytest tests/test_svd_parser.py -v        # SVD parsing
-pytest tests/test_bootrom.py -v           # RP2040/RP2350 bootrom
-pytest tests/test_usbip_cdc.py -v         # USB-IP CDC-ACM
-pytest python/slab_stm32/test_f439_crypto.py -v  # CRYP/HASH
+PYTHONPATH=slab/python pytest slab/tests/test_svd_parser.py -v        # SVD parsing
+PYTHONPATH=slab/python pytest slab/tests/test_bootrom.py -v           # RP2040/RP2350 bootrom
+PYTHONPATH=slab/python pytest slab/tests/test_usbip_cdc.py -v         # USB-IP CDC-ACM
+PYTHONPATH=slab/python pytest slab/python/slab_stm32/test_f439_crypto.py -v  # CRYP/HASH
 
 # Run end-to-end tests (requires QEMU)
-python3 tests/firmware/examples/stm32_crypto_cdc/test_e2e_crypto.py
+PYTHONPATH=slab/python python3 slab/tests/e2e_firmware_test.py
 ```
 
 ---
 
 ## License
 
-- **QEMU Machine Code** (`qemu/hw/`): GPL-3.0-or-later
+- **QEMU Machine Code** (`hw/arm/`): GPL-2.0-or-later
 - **Python Packages and Tests**: Apache-2.0
 
 ---
@@ -257,7 +257,7 @@ python3 tests/firmware/examples/stm32_crypto_cdc/test_e2e_crypto.py
 ## Author
 
 **Mathieu Renard**
-TwistedWires Security Lab
+Twisted Wires Security Lab
 <mathieu.renard@twistedwires.io>
 
 ---
@@ -273,4 +273,4 @@ TwistedWires Security Lab
 
 ---
 
-Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.

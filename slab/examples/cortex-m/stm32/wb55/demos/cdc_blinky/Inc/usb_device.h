@@ -1,7 +1,7 @@
 /**
   * USB Device initialization header
   *
-  * Copyright (C) 2026 TwistedWires Security Lab. All Rights Reserved.
+  * Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
   */
 #ifndef __USB_DEVICE_H
 #define __USB_DEVICE_H
