@@ -65,6 +65,7 @@ MCU_REGISTRY: Dict[str, tuple] = {
     "STM32L433":  ("slab_stm32", "STM32L4xxPeripheralSet",  "cortex-m4",  80_000_000),
     "STM32H563":  ("slab_stm32", "STM32H563PeripheralSet",  "cortex-m33", 250_000_000),
     "STM32H745":  ("slab_stm32", "STM32H7xxPeripheralSet",  "cortex-m7", 480_000_000),
+    "STM32U5A5":  ("slab_stm32", "STM32U5A5PeripheralSet",  "cortex-m33", 160_000_000),
     "STM32U585":  ("slab_stm32", "STM32U585PeripheralSet",  "cortex-m33", 160_000_000),
     "STM32WB55":  ("slab_stm32", "STM32WB55PeripheralSet",  "cortex-m4",  64_000_000),
     "STM32WB35":  ("slab_stm32", "STM32WB35PeripheralSet",  "cortex-m4",  64_000_000),

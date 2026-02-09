@@ -23,14 +23,14 @@ from slab_peripherals.mpu import MemoryProtectionController, ProtectionFault
 from .stm32_usart import STM32USARTv2, STM32LPUART
 from .stm32_spi import STM32SPIv2
 from .stm32_i2c import STM32I2Cv2
-from .stm32_rcc import STM32RCCv3
+from .stm32_rcc import STM32RCCv5
 from .stm32_dma import STM32DMAv2
 from .stm32_timers import STM32BasicTimer, STM32GeneralTimer, STM32AdvancedTimer, STM32LPTIM
 from .stm32_adc import STM32ADCv3
 from .stm32_dac import STM32DAC
 from .stm32_pwr import STM32PWRv2
 from .stm32_flash import STM32FLASHv3
-from .stm32_misc import STM32SYSCFG, STM32IWDG, STM32WWDG, STM32RTC, STM32CRC, STM32RNG, STM32DBG
+from .stm32_misc import STM32SYSCFG, STM32IWDG, STM32WWDG, STM32RTC, STM32CRC, STM32RNG, STM32DBG, STM32OTP
 
 
 class STM32GTZC(STM32Peripheral):
@@ -730,13 +730,13 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
         self._create_timers()
         self._create_analog()
         self._create_dma()
+        self._create_usb()
         self._create_security()
         self._create_misc()
 
     def _create_clock_system(self):
         """Create RCC and related peripherals."""
-        self.rcc = STM32RCCv3(base=0x46020C00)
-        self.rcc.hsi_freq = 16_000_000
+        self.rcc = STM32RCCv5(base=0x46020C00)
         self.add_peripheral(self.rcc)
 
         self.pwr = STM32PWRv2(base=0x46020800, family="U5")
@@ -908,6 +908,13 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
         self.add_peripheral(self.hash)
         self.add_peripheral(self.rng)
 
+    def _create_usb(self):
+        """Create USB OTG HS peripheral (DWC2)."""
+        from slab_cortex_m.usb_cdc_peripheral import USBCDCPeripheral
+        self.usb = USBCDCPeripheral(
+            name="USB_OTG_HS", base=0x42040000, size=0x40000, irq=73)
+        self.add_peripheral(self.usb)
+
     def _create_misc(self):
         """Create miscellaneous peripherals."""
         self.syscfg = STM32SYSCFG(base=0x46000400, family="U5")
@@ -917,12 +924,14 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
         self.crc = STM32CRC(base=0x40023000, family="U5")
         self.dbg = STM32DBG(base=0xE0044000, device="U5A5")
 
+        self.otp = STM32OTP(family="U5", flash_size_kb=4096)
         self.add_peripheral(self.syscfg)
         self.add_peripheral(self.iwdg)
         self.add_peripheral(self.wwdg)
         self.add_peripheral(self.rtc)
         self.add_peripheral(self.crc)
         self.add_peripheral(self.dbg)
+        self.add_peripheral(self.otp)
 
 
 class STM32U5A5PeripheralSet(STM32U5xxPeripheralSet):
