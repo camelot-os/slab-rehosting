@@ -185,7 +185,7 @@ class RP2040Server:
             chip=self.chip,
             log=logging.getLogger(f'{self.chip}.Periph')
         )
-        self.peripherals.irq_callback = self._send_irq
+        self.peripherals.setup_irq_callback(self._send_irq)
 
         # Create USB bootloader
         if self.chip == "RP2040":
@@ -237,8 +237,8 @@ class RP2040Server:
                 cmd = cmd_type[0]
 
                 if cmd in (CMD_READ, CMD_READ_S):
-                    # Read: [addr:4][size:4][secure:1]
-                    data = await reader.readexactly(9)
+                    # Read: [addr:4][size:4][secure:1][PC:4] = 13 bytes
+                    data = await reader.readexactly(13)
                     address, size = struct.unpack('<II', data[:8])
                     secure = (cmd == CMD_READ_S) or (data[8] == 1)
 
@@ -261,8 +261,8 @@ class RP2040Server:
                     await writer.drain()
 
                 elif cmd in (CMD_WRITE, CMD_WRITE_S):
-                    # Write: [addr:4][size:4][value:4][secure:1]
-                    data = await reader.readexactly(13)
+                    # Write: [addr:4][size:4][value:4][secure:1][PC:4] = 17 bytes
+                    data = await reader.readexactly(17)
                     address, size, value = struct.unpack('<III', data[:12])
                     secure = (cmd == CMD_WRITE_S) or (data[12] == 1)
 
@@ -614,6 +614,275 @@ class RP2040USBIPServer:
 
 
 # =============================================================================
+# FIRMWARE-IN-THE-LOOP USBIP SERVER
+# =============================================================================
+
+class RP2040FirmwareUSBIP:
+    """
+    USBIP server bridging host USB to the RP2040 USB register model.
+
+    Unlike RP2040USBIPServer which uses a Python-only USB device,
+    this class forwards USBIP requests to the RP2040USB peripheral
+    where real firmware (e.g. bootrom) handles the USB protocol.
+
+    USBIP host <-> RP2040FirmwareUSBIP <-> inject/wait <-> RP2040USB/DPRAM <-> QEMU
+    """
+
+    USBIP_VERSION = 0x0111
+
+    # USBIP commands
+    OP_REQ_DEVLIST = 0x8005
+    OP_REP_DEVLIST = 0x0005
+    OP_REQ_IMPORT = 0x8003
+    OP_REP_IMPORT = 0x0003
+    USBIP_CMD_SUBMIT = 0x00000001
+    USBIP_RET_SUBMIT = 0x00000003
+    USBIP_CMD_UNLINK = 0x00000002
+    USBIP_RET_UNLINK = 0x00000004
+
+    def __init__(self, peripherals: RP2040PeripheralSet, port: int = 3240,
+                 vid: int = 0x2E8A, pid: int = 0x0003):
+        self.port = port
+        self.vid = vid
+        self.pid = pid
+        self.peripherals = peripherals
+        self.running = False
+        self.log = logging.getLogger('FW-USBIP')
+        self._enumerated = False
+
+    @property
+    def usb(self):
+        """RP2040USB peripheral."""
+        return self.peripherals.usb
+
+    async def wait_for_pullup(self, timeout: float = 10.0):
+        """Wait for firmware to enable USB pullup (SIE_CTRL.PULLUP_EN)."""
+        import time
+        from .rp2040_misc import RP2040USB
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self.usb.sie_ctrl & RP2040USB.SIE_CTRL_PULLUP_EN:
+                self.log.info("Firmware enabled USB pullup")
+                return True
+            await asyncio.sleep(0.01)
+        self.log.warning("Timeout waiting for USB pullup")
+        return False
+
+    async def enumerate_device(self):
+        """Perform USB bus reset + enumeration sequence."""
+        if self._enumerated:
+            return
+
+        # Inject VBUS detect
+        self.usb.inject_vbus(True)
+        await asyncio.sleep(0.05)
+
+        # Wait for firmware to enable pullup
+        if not await self.wait_for_pullup():
+            return
+
+        # Inject bus reset
+        self.usb.inject_usbrst()
+        await asyncio.sleep(0.05)
+
+        self._enumerated = True
+        self.log.info("USB device enumerated")
+
+    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Handle USBIP client."""
+        addr = writer.get_extra_info('peername')
+        self.log.info(f"USBIP client connected: {addr}")
+        imported = False
+
+        try:
+            while self.running:
+                if not imported:
+                    header = await reader.read(8)
+                    if not header or len(header) < 8:
+                        break
+
+                    version, command = struct.unpack('>HxxxxH', header)
+
+                    if command == self.OP_REQ_DEVLIST:
+                        await self._handle_devlist(writer)
+                    elif command == self.OP_REQ_IMPORT:
+                        imported = await self._handle_import(reader, writer)
+                    else:
+                        break
+                else:
+                    header = await reader.read(4)
+                    if not header:
+                        break
+
+                    command = struct.unpack('>I', header)[0]
+
+                    if command == self.USBIP_CMD_SUBMIT:
+                        await self._handle_submit(reader, writer, header)
+                    elif command == self.USBIP_CMD_UNLINK:
+                        await self._handle_unlink(reader, writer, header)
+                    else:
+                        break
+
+        except Exception as e:
+            self.log.error(f"USBIP error: {e}")
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            self.log.info("USBIP client disconnected")
+
+    async def _handle_devlist(self, writer: asyncio.StreamWriter):
+        """Handle device list request."""
+        self.log.info("Device list requested")
+
+        path = b'/sys/devices/platform/rp2040/usb1/1-1'.ljust(256, b'\x00')
+        busid = b'1-1'.ljust(32, b'\x00')
+
+        response = struct.pack('>HHI', self.USBIP_VERSION, self.OP_REP_DEVLIST, 0)
+        response += struct.pack('>I', 1)  # One device
+        response += path + busid
+        response += struct.pack('>IIIHHHBBBBBB',
+            1, 1, 2,  # busnum, devnum, speed (FULL)
+            self.vid, self.pid, 0x0100,
+            0x00, 0x00, 0x00,  # Device class (defined at interface)
+            1, 1, 1  # bConfigurationValue, bNumConfigurations, bNumInterfaces
+        )
+        response += struct.pack('>BBBB', 0x08, 0x06, 0x50, 0x00)  # MSC
+
+        writer.write(response)
+        await writer.drain()
+
+    async def _handle_import(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> bool:
+        """Handle device import request."""
+        busid_data = await reader.read(32)
+        busid = busid_data.rstrip(b'\x00').decode('utf-8')
+        self.log.info(f"Import requested: {busid}")
+
+        if busid == "1-1":
+            # Enumerate device on first import
+            await self.enumerate_device()
+
+            path = b'/sys/devices/platform/rp2040/usb1/1-1'.ljust(256, b'\x00')
+            busid_bytes = b'1-1'.ljust(32, b'\x00')
+
+            response = struct.pack('>HHI', self.USBIP_VERSION, self.OP_REP_IMPORT, 0)
+            response += path + busid_bytes
+            response += struct.pack('>IIIHHHBBBBBB',
+                1, 1, 2,
+                self.vid, self.pid, 0x0100,
+                0x00, 0x00, 0x00,
+                1, 1, 1
+            )
+
+            writer.write(response)
+            await writer.drain()
+            self.log.info("Device imported successfully")
+            return True
+        else:
+            response = struct.pack('>HHI', self.USBIP_VERSION, self.OP_REP_IMPORT, 1)
+            writer.write(response)
+            await writer.drain()
+            return False
+
+    async def _handle_submit(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, header: bytes):
+        """Handle URB submit -- forward to firmware via RP2040USB."""
+        submit_data = header + await reader.read(44)
+
+        seqnum = struct.unpack('>I', submit_data[4:8])[0]
+        devid = struct.unpack('>I', submit_data[8:12])[0]
+        direction = struct.unpack('>I', submit_data[12:16])[0]
+        ep = struct.unpack('>I', submit_data[16:20])[0]
+        transfer_flags = struct.unpack('>I', submit_data[20:24])[0]
+        transfer_length = struct.unpack('>I', submit_data[24:28])[0]
+        setup = submit_data[40:48]
+
+        # Read OUT data
+        out_data = bytes()
+        if direction == 0 and transfer_length > 0:
+            out_data = await reader.read(transfer_length)
+
+        response_data = bytes()
+        actual_length = 0
+        status = 0
+
+        try:
+            if ep == 0:
+                # Control transfer -- inject SETUP and wait for firmware response
+                if direction != 0:
+                    # IN control: inject SETUP, wait for firmware EP0 IN response
+                    self.usb.inject_setup_packet(setup)
+                    response_data = await self.usb.wait_ep0_response(timeout=5.0)
+                    if len(response_data) > transfer_length:
+                        response_data = response_data[:transfer_length]
+                    actual_length = len(response_data)
+                else:
+                    # OUT control: inject SETUP, then inject OUT data if any
+                    self.usb.inject_setup_packet(setup)
+                    if out_data:
+                        await asyncio.sleep(0.01)  # Let firmware process SETUP
+                        self.usb.inject_out_data(0, out_data)
+                    actual_length = len(out_data)
+            else:
+                # Bulk transfer
+                if direction == 0:
+                    # Bulk OUT: inject data into EPn
+                    self.usb.inject_bulk_out(ep, out_data)
+                    actual_length = len(out_data)
+                else:
+                    # Bulk IN: wait for firmware to fill EPn IN buffer
+                    response_data = await self.usb.wait_bulk_in_response(ep, timeout=5.0)
+                    actual_length = len(response_data)
+        except Exception as e:
+            self.log.error(f"Submit error EP{ep}: {e}")
+            status = -32  # EPIPE
+
+        # Build USBIP response
+        resp = struct.pack('>IIIII',
+            self.USBIP_RET_SUBMIT, seqnum, devid, direction, ep
+        )
+        resp += struct.pack('>iIIIIxxxxxxxx', status, actual_length, 0, 0, 0)
+
+        if direction != 0 and actual_length > 0:
+            resp += response_data[:actual_length]
+
+        writer.write(resp)
+        await writer.drain()
+
+    async def _handle_unlink(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, header: bytes):
+        """Handle unlink request."""
+        data = header + await reader.read(44)
+        seqnum = struct.unpack('>I', data[4:8])[0]
+
+        resp = struct.pack('>IIIII', self.USBIP_RET_UNLINK, seqnum, 0, 0, 0)
+        resp += struct.pack('>i', -104)  # ECONNRESET
+        resp += bytes(24)  # Padding to 48 bytes total
+
+        writer.write(resp)
+        await writer.drain()
+
+    async def start(self):
+        """Start the firmware USBIP server."""
+        self.running = True
+
+        server = await asyncio.start_server(
+            self.handle_client,
+            '0.0.0.0',
+            self.port,
+            reuse_address=True
+        )
+
+        self.log.info(f"Firmware USBIP server started on port {self.port}")
+        self.log.info(f"VID:PID = {self.vid:04X}:{self.pid:04X}")
+        self.log.info("To attach: sudo usbip attach -r localhost -b 1-1")
+
+        async with server:
+            await server.serve_forever()
+
+    async def stop(self):
+        """Stop the USBIP server."""
+        self.running = False
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
@@ -627,14 +896,22 @@ async def main_async(args):
         usbip_port=args.usbip_port
     )
 
-    # Create USBIP server if enabled
+    # Create USBIP server
     usbip_server = None
-    if args.usbip:
+    if args.bootrom:
+        # Firmware-in-the-loop: USBIP forwards to RP2040USB register model
+        usbip_server = RP2040FirmwareUSBIP(
+            server.peripherals,
+            port=args.usbip_port,
+            vid=0x2E8A,  # Raspberry Pi
+            pid=0x0003,  # RP2 Boot
+        )
+    elif args.usbip:
+        # Python-only: USBIP uses RP2040BootromUSB directly
         usbip_server = RP2040USBIPServer(server.usb_boot, args.usbip_port)
 
     try:
         if usbip_server:
-            # Run both servers
             await asyncio.gather(
                 server.start(),
                 usbip_server.start()
@@ -656,7 +933,9 @@ def main():
     parser.add_argument('--port', '-p', type=int, default=5000,
                         help='TCP port for QEMU (default: 5000)')
     parser.add_argument('--usbip', action='store_true',
-                        help='Enable USBIP server for bootloader mass storage')
+                        help='Enable USBIP server for bootloader mass storage (Python-only)')
+    parser.add_argument('--bootrom', action='store_true',
+                        help='Enable firmware-in-the-loop USBIP (real bootrom in QEMU)')
     parser.add_argument('--usbip-port', type=int, default=3240,
                         help='USBIP port (default: 3240)')
     parser.add_argument('-v', '--verbose', action='store_true',
