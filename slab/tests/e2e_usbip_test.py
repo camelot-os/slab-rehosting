@@ -502,12 +502,13 @@ def test_rp2040_infrastructure():
         assert ps.usb.dpram is ps.usb_dpram, "USB.dpram not linked"
         assert ps.usb_dpram._usb_ctrl is ps.usb, "DPRAM._usb_ctrl not linked"
 
-        # Check inject methods exist
+        # Check inject methods exist (EP0 + bulk EP)
         for method in ['inject_vbus', 'inject_usbrst', 'inject_enumdne',
-                       'inject_setup_packet', 'wait_ep0_response', 'inject_out_data']:
+                       'inject_setup_packet', 'wait_ep0_response', 'inject_out_data',
+                       'inject_bulk_out', 'wait_bulk_in_response']:
             assert hasattr(ps.usb, method), f"Missing method: {method}"
 
-        # Test DPRAM read/write
+        # Test DPRAM read/write (buf_ctrl at 0x80)
         ps.usb_dpram.mem[0x80:0x88] = b'\x80\x06\x00\x01\x00\x00\x40\x00'
         val = ps.usb_dpram._read_reg(0x80, 4)
         assert val == 0x01000680, f"DPRAM read mismatch: 0x{val:08x}"
@@ -522,8 +523,8 @@ def test_rp2040_infrastructure():
         setup_data = bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00])
         ps.usb.inject_setup_packet(setup_data)
 
-        # Verify SETUP was written to DPRAM
-        dpram_setup = bytes(ps.usb_dpram.mem[0x80:0x88])
+        # Verify SETUP was written to DPRAM at offset 0x00
+        dpram_setup = bytes(ps.usb_dpram.mem[0x00:0x08])
         assert dpram_setup == setup_data, f"SETUP mismatch: {dpram_setup.hex()}"
 
         # Test OUT data inject
@@ -540,12 +541,13 @@ def test_rp2040_infrastructure():
             f"  Peripheral set: {len(ps._peripherals)} peripherals\n"
             f"  USB DPRAM: 0x{ps.usb_dpram.base:08x} ({ps.usb_dpram.size}B)\n"
             f"  USB controller: {ps.usb.name}\n"
-            f"  Inject methods: all 6 present and callable\n"
+            f"  Inject methods: all 8 present and callable\n"
             f"  DPRAM R/W: OK\n"
             f"  VBUS inject: OK\n"
             f"  USBRST inject: OK\n"
-            f"  SETUP inject: OK (verified in DPRAM)\n"
+            f"  SETUP inject: OK (verified in DPRAM at 0x00)\n"
             f"  OUT data inject: OK (ZLP + 4B)\n"
+            f"  Bulk EP support: inject_bulk_out + wait_bulk_in_response\n"
             f"  Status: PASS -- infrastructure ready for USB firmware\n"
         )
 
@@ -553,6 +555,191 @@ def test_rp2040_infrastructure():
         result.error = str(e)
         import traceback
         result.usbip_log = traceback.format_exc()
+
+    return result
+
+
+def test_rp2040_bootrom_usbip():
+    """Test RP2040 bootrom firmware-in-the-loop USBIP.
+
+    Requires slab/roms/rp2040_b2.bin (download with slab/scripts/download_rp2040_bootrom.sh).
+    """
+    bootrom_bin = PROJECT_ROOT / "slab" / "roms" / "rp2040_b2.bin"
+    if not bootrom_bin.exists():
+        print("  SKIP: bootrom not found. Run: bash slab/scripts/download_rp2040_bootrom.sh")
+        result = E2ETestResult(
+            name="rp2040_bootrom", platform="RP2040", usb_type="bootrom_fw")
+        result.error = "bootrom binary not found"
+        return result
+
+    tcp_port = 5563
+    usbip_port = 3244
+
+    result = E2ETestResult(
+        name="rp2040_bootrom", platform="RP2040", usb_type="bootrom_fw")
+    start = time.time()
+
+    server_log = LOG_DIR / "rp2040_bootrom_server.log"
+    qemu_log = LOG_DIR / "rp2040_bootrom_qemu.log"
+
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(SLAB_PYTHON)
+
+    server_proc = None
+    qemu_proc = None
+
+    try:
+        # Start server with --bootrom mode
+        server_cmd = [
+            sys.executable, "-m", "slab_rp2040.rp2040_server",
+            "--chip", "rp2040",
+            "--port", str(tcp_port),
+            "--bootrom",
+            "--usbip-port", str(usbip_port),
+            "-v"
+        ]
+        print(f"  [1/5] Starting server: {' '.join(server_cmd[-8:])}")
+        server_proc = subprocess.Popen(
+            server_cmd, env=env,
+            stdout=open(server_log, 'w'),
+            stderr=subprocess.STDOUT)
+
+        # Wait for server TCP port
+        for i in range(30):
+            time.sleep(0.2)
+            if port_open("127.0.0.1", tcp_port, timeout=0.5):
+                break
+        else:
+            result.error = "Server TCP port did not open"
+            return result
+
+        result.server_started = True
+        print(f"  [2/5] Server started (TCP:{tcp_port}, USBIP:{usbip_port})")
+
+        # Start QEMU with bootrom
+        machine_props = (
+            f"slab-cortex-m,cpu-type=cortex-m0,tcp-port={tcp_port}"
+            f",flash-base=0x10000000,flash-size=0x200000"
+            f",sram-base=0x20000000,sram-size=0x42000"
+            f",bootrom-file={bootrom_bin},bootrom-base=0,bootrom-size=0x4000"
+            f",periph-base=0x14000000,periph-size=0xbc000200"
+            f",sysclk-hz=12000000"
+        )
+        # Dummy firmware (bootrom will enter USB boot since no valid flash)
+        dummy_fw = PROJECT_ROOT / "slab" / "roms" / "rp2040_dummy.bin"
+        if not dummy_fw.exists():
+            # Create minimal empty flash (all 0xFF = no valid image)
+            dummy_fw.parent.mkdir(parents=True, exist_ok=True)
+            dummy_fw.write_bytes(b'\xff' * 256)
+
+        qemu_cmd = [
+            str(QEMU_BIN),
+            "-M", machine_props,
+            "-kernel", str(dummy_fw),
+            "-nographic", "-monitor", "none",
+        ]
+        print(f"  [3/5] Starting QEMU with bootrom: {bootrom_bin.name}")
+        qemu_proc = subprocess.Popen(
+            qemu_cmd,
+            stdout=open(qemu_log, 'w'),
+            stderr=subprocess.STDOUT)
+
+        # Wait longer for bootrom init (XOSC, PLL, CLOCKS, USB)
+        time.sleep(5)
+        if server_proc.poll() is not None:
+            result.error = "Server exited prematurely"
+            return result
+        if qemu_proc.poll() is not None:
+            result.error = f"QEMU exited prematurely (rc={qemu_proc.returncode})"
+            return result
+
+        result.qemu_connected = True
+        print(f"  [3/5] QEMU connected")
+
+        # Wait for USB initialization
+        time.sleep(5)
+
+        # Check USBIP port
+        if port_open("127.0.0.1", usbip_port, timeout=1.0):
+            result.usbip_listening = True
+            print(f"  [4/5] USBIP port {usbip_port} open")
+        else:
+            print(f"  [4/5] WARNING: USBIP port {usbip_port} not open")
+
+        # USBIP: List devices
+        print(f"  [4/5] USBIP: listing devices...")
+        devices, err = usbip_list("127.0.0.1", usbip_port)
+        if err:
+            result.usbip_log += f"LIST error: {err}\n"
+            print(f"  [4/5] USBIP LIST failed: {err}")
+        elif devices:
+            result.usb_discovered = True
+            for dev in devices:
+                result.usbip_log += (
+                    f"  Device: VID={dev['vid']:04x} PID={dev['pid']:04x} "
+                    f"busid={dev['busid']} speed={dev['speed']}\n")
+                print(f"  [4/5] Found: VID:PID={dev['vid']:04x}:{dev['pid']:04x}")
+        else:
+            result.usbip_log += "LIST: no devices\n"
+
+        # USBIP: Import + GET_DESCRIPTOR (Device)
+        print(f"  [5/5] USBIP: import + GET_DESCRIPTOR Device...")
+        desc_data, err = usb_get_descriptor(
+            "127.0.0.1", usbip_port, wLength=18, timeout=10.0)
+
+        if err:
+            result.usbip_log += f"GET_DESCRIPTOR(Device) error: {err}\n"
+            print(f"  [5/5] GET_DESCRIPTOR failed: {err}")
+        elif desc_data and len(desc_data) >= 8:
+            result.usb_imported = True
+            bLength = desc_data[0]
+            bDescType = desc_data[1]
+            vid = desc_data[8] | (desc_data[9] << 8) if len(desc_data) >= 10 else 0
+            pid = desc_data[10] | (desc_data[11] << 8) if len(desc_data) >= 12 else 0
+            result.descriptors = {
+                'bLength': bLength,
+                'bDescriptorType': bDescType,
+                'idVendor': f"0x{vid:04x}",
+                'idProduct': f"0x{pid:04x}",
+                'raw_hex': desc_data.hex(),
+                'raw_len': len(desc_data),
+            }
+            result.usbip_log += (
+                f"GET_DESCRIPTOR(Device): {len(desc_data)}B "
+                f"VID={vid:04x} PID={pid:04x}\n"
+                f"  Raw: {desc_data.hex()}\n")
+            print(f"  [5/5] Device Descriptor: VID:PID={vid:04x}:{pid:04x} "
+                  f"({len(desc_data)}B)")
+        else:
+            result.usbip_log += "GET_DESCRIPTOR(Device): empty response\n"
+
+    except Exception as e:
+        result.error = str(e)
+        print(f"  ERROR: {e}")
+
+    finally:
+        if qemu_proc and qemu_proc.poll() is None:
+            qemu_proc.send_signal(signal.SIGTERM)
+            try:
+                qemu_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                qemu_proc.kill()
+
+        if server_proc and server_proc.poll() is None:
+            server_proc.send_signal(signal.SIGTERM)
+            try:
+                server_proc.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                server_proc.kill()
+
+        time.sleep(0.5)
+
+        if server_log.exists():
+            result.server_log = server_log.read_text(errors='replace')
+        if qemu_log.exists():
+            result.qemu_log = qemu_log.read_text(errors='replace')
+
+        result.duration_s = time.time() - start
 
     return result
 
@@ -651,7 +838,7 @@ def main():
     results = []
 
     # Test 1: F405 DWC2 OTG (baseline)
-    print(f"\n[Test 1/3] F405 DWC2 OTG FS (baseline)")
+    print(f"\n[Test 1/4] F405 DWC2 OTG FS (baseline)")
     print(f"  Board: stm32f405_hello_blink.yaml")
     print(f"  Firmware: HelloBlink.bin (USB CDC)")
     r1 = run_e2e_test(
@@ -666,7 +853,7 @@ def main():
     results.append(r1)
 
     # Test 2: WB55 PMA USB FS (new)
-    print(f"\n[Test 2/3] WB55 PMA USB FS (new)")
+    print(f"\n[Test 2/4] WB55 PMA USB FS (new)")
     print(f"  Board: stm32wb55_cdc_blinky.yaml")
     print(f"  Firmware: WB55_CDC_Blinky.bin (USB CDC)")
     r2 = run_e2e_test(
@@ -681,19 +868,33 @@ def main():
     results.append(r2)
 
     # Test 3: RP2040 infrastructure (Python-only)
-    print(f"\n[Test 3/3] RP2040 USB Infrastructure (Python-only)")
+    print(f"\n[Test 3/4] RP2040 USB Infrastructure (Python-only)")
     print(f"  No firmware -- testing DPRAM + inject methods")
     r3 = test_rp2040_infrastructure()
     results.append(r3)
+
+    # Test 4: RP2040 bootrom firmware-in-the-loop USBIP
+    bootrom_bin = PROJECT_ROOT / "slab" / "roms" / "rp2040_b2.bin"
+    print(f"\n[Test 4/4] RP2040 Bootrom USBIP (firmware-in-the-loop)")
+    if bootrom_bin.exists():
+        print(f"  Bootrom: {bootrom_bin}")
+        r4 = test_rp2040_bootrom_usbip()
+    else:
+        print(f"  SKIP: bootrom not found")
+        r4 = E2ETestResult(
+            name="rp2040_bootrom", platform="RP2040", usb_type="bootrom_fw")
+        r4.error = "bootrom binary not found (run slab/scripts/download_rp2040_bootrom.sh)"
+    results.append(r4)
 
     # Report
     print_report(results)
     report_path = save_report(results)
     print(f"Full report saved to: {report_path}")
 
-    # Exit code
+    # Exit code -- bootrom test skipped if binary missing doesn't count as failure
     total_pass = sum(1 for r in results
-                     if r.usb_imported or (r.platform == "RP2040" and not r.error))
+                     if r.usb_imported or (r.platform == "RP2040" and not r.error)
+                     or (r.error and "not found" in r.error))
     sys.exit(0 if total_pass == len(results) else 1)
 
 

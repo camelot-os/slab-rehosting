@@ -1,0 +1,21 @@
+name: STM32U5A5_CDC_Blinky
+mcu: STM32U5A5
+clock: 160000000
+
+usb:
+  type: dwc2_otg_hs
+  base: 0x42040000
+  irq: 73
+
+external_devices:
+  - type: LED
+    bus: GPIOC
+    params: {pin: 7, color: green}
+  - type: LED
+    bus: GPIOB
+    params: {pin: 7, color: blue}
+
+# U5A5: 4MB flash, 2496KB SRAM (SRAM1+2+3+5 contiguous)
+qemu_extra:
+  sram-size: "0x270000"
+  flash-size: "0x400000"

@@ -665,6 +665,30 @@ def build_test_cases() -> List[TestCase]:
             timeout=6, expect_mmio=mmio,
         ))
 
+    # -- STM32U5A5 CDC Blinky (Cortex-M33, DWC2 OTG HS) --
+    # U5A5: 4MB flash, 2496KB SRAM (stack at 0x20270000)
+    u5a5_qemu = {
+        "sysclk-hz": "160000000",
+        "sram-size": "0x270000",
+        "flash-size": "0x400000",
+    }
+    tests.append(TestCase(
+        name="STM32U5A5 CDC Blinky [board]",
+        firmware="slab/examples/cortex-m/stm32/u5a5/demos/cdc_blinky/build/U5A5_CDC_Blinky.bin",
+        cpu="cortex-m33", mode="board",
+        board_yaml="slab/boards/stm32u5a5_cdc_blinky.yaml",
+        timeout=8, expect_mmio=50,
+        qemu_extra=u5a5_qemu,
+    ))
+
+    tests.append(TestCase(
+        name="STM32U5A5 CDC Blinky [direct]",
+        firmware="slab/examples/cortex-m/stm32/u5a5/demos/cdc_blinky/build/U5A5_CDC_Blinky.bin",
+        cpu="cortex-m33", mode="direct", mcu="STM32U5A5",
+        timeout=8, expect_mmio=50,
+        qemu_extra=u5a5_qemu,
+    ))
+
     # -- RP2040 (flash at 0x10000000) --
     tests.append(TestCase(
         name="RP2040 EEPROM [direct]",

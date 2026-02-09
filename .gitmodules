@@ -60,3 +60,9 @@
 [submodule "slab/examples/repos/STM32CubeWB"]
 	path = slab/examples/repos/STM32CubeWB
 	url = https://github.com/STMicroelectronics/STM32CubeWB.git
+[submodule "slab/examples/repos/STM32CubeU5"]
+	path = slab/examples/repos/STM32CubeU5
+	url = https://github.com/STMicroelectronics/STM32CubeU5.git
+[submodule "slab/examples/repos/stm32-mw-usb-device"]
+	path = slab/examples/repos/stm32-mw-usb-device
+	url = https://github.com/STMicroelectronics/stm32-mw-usb-device.git
