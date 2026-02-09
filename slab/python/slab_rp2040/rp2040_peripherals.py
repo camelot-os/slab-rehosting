@@ -42,19 +42,26 @@ def _import_misc():
         RP2040RTC, RP2040ROSC, RP2040SYSINFO, RP2040SYSCFG,
         RP2040VREG, RP2040TBMAN, RP2040BUSCTRL, RP2040XIP,
         RP2040SSI, RP2040IOQSPI, RP2040PADSQSPI, RP2040USB,
-        # Bootrom-compatible peripherals (more detailed implementations)
-        RP2040XOSC as RP2040XOSC_MISC,
-        RP2040PLL as RP2040PLL_MISC,
-        RP2040RESETS, RP2040CLOCKS, RP2040PSM as RP2040PSM_MISC,
-        RP2040WATCHDOG
+        # Bootrom-compatible peripherals (detailed implementations)
+        RP2040RESETS, RP2040CLOCKS, RP2040WATCHDOG
     )
     return (RP2040RTC, RP2040ROSC, RP2040SYSINFO, RP2040SYSCFG,
             RP2040VREG, RP2040TBMAN, RP2040BUSCTRL, RP2040XIP,
-            RP2040SSI, RP2040IOQSPI, RP2040PADSQSPI, RP2040USB)
+            RP2040SSI, RP2040IOQSPI, RP2040PADSQSPI, RP2040USB,
+            RP2040RESETS, RP2040CLOCKS, RP2040WATCHDOG)
 
 
 class RP2040Peripheral(ABC):
-    """Base class for RP2040 peripherals."""
+    """Base class for RP2040 peripherals.
+
+    Supports RP2040 bus-level atomic register aliases (Section 2.1.2):
+    - base + 0x0000: Normal read/write
+    - base + 0x1000: XOR on write (read returns normal value)
+    - base + 0x2000: SET on write (OR bits)
+    - base + 0x3000: CLR on write (AND NOT bits)
+
+    Each peripheral occupies a 16KB window (4 x 4KB aliases).
+    """
 
     def __init__(self, name: str, base: int, size: int, irq: int = -1):
         self.name = name
@@ -66,16 +73,42 @@ class RP2040Peripheral(ABC):
         self.irq_callback: Optional[Callable[[int, int], None]] = None
 
     def contains(self, addr: int) -> bool:
-        return self.base <= addr < self.base + self.size
+        # Check all 4 atomic alias ranges
+        for alias_offset in (0x0000, 0x1000, 0x2000, 0x3000):
+            alias_base = self.base + alias_offset
+            if alias_base <= addr < alias_base + self.size:
+                return True
+        return False
+
+    def _resolve_alias(self, addr: int) -> Tuple[int, int]:
+        """Resolve atomic alias, returning (register_offset, alias_type).
+
+        alias_type: 0=normal, 1=XOR, 2=SET, 3=CLR
+        """
+        raw_offset = addr - self.base
+        if raw_offset >= 0x1000:
+            alias = raw_offset // 0x1000
+            offset = raw_offset % 0x1000
+        else:
+            alias = 0
+            offset = raw_offset
+        return (offset, alias)
 
     def read(self, addr: int, size: int, secure: bool = True) -> Tuple[int, int]:
-        offset = addr - self.base
+        offset, _alias = self._resolve_alias(addr)
         value = self._read_reg(offset, size)
         return (value, STATUS_OK)
 
     def write(self, addr: int, size: int, value: int, secure: bool = True) -> int:
-        offset = addr - self.base
-        self._write_reg(offset, size, value)
+        offset, alias = self._resolve_alias(addr)
+        if alias == 0:
+            self._write_reg(offset, size, value)
+        elif alias == 1:  # XOR
+            self._write_reg(offset, size, self._read_reg(offset, size) ^ value)
+        elif alias == 2:  # SET
+            self._write_reg(offset, size, self._read_reg(offset, size) | value)
+        elif alias == 3:  # CLR
+            self._write_reg(offset, size, self._read_reg(offset, size) & ~value)
         return STATUS_OK
 
     def _read_reg(self, offset: int, size: int) -> int:
@@ -1401,16 +1434,28 @@ class RP2040PeripheralSet:
         self.irq_callback: Optional[Callable[[int, int], None]] = None
 
         # Create core peripherals
+        # Use detailed implementations from rp2040_misc for bootrom compatibility
+        # (CLOCKS has CLK_*_SELECTED, RESETS has RESET_DONE logic, WATCHDOG has TICK)
+        try:
+            from .rp2040_misc import (
+                RP2040CLOCKS as _DetailedClocks,
+                RP2040RESETS as _DetailedResets,
+                RP2040WATCHDOG as _DetailedWatchdog,
+            )
+            _use_detailed = True
+        except ImportError:
+            _use_detailed = False
+
         self.gpio = RP2040GPIO()
         self.pads = RP2040Pads()
         self.sio = RP2040SIO(cpuid=cpuid)
         self.timer = RP2040Timer()
-        self.clocks = RP2040Clocks()
-        self.resets = RP2040Resets()
+        self.clocks = _DetailedClocks() if _use_detailed else RP2040Clocks()
+        self.resets = _DetailedResets() if _use_detailed else RP2040Resets()
         self.xosc = RP2040XOSC()
         self.pll_sys = RP2040PLL("PLL_SYS", 0x40028000)
         self.pll_usb = RP2040PLL("PLL_USB", 0x4002C000)
-        self.watchdog = RP2040Watchdog()
+        self.watchdog = _DetailedWatchdog() if _use_detailed else RP2040Watchdog()
         self.psm = RP2040PSM()
 
         # Create PIO blocks
@@ -1514,7 +1559,8 @@ class RP2040PeripheralSet:
         try:
             (RP2040RTC, RP2040ROSC, RP2040SYSINFO, RP2040SYSCFG,
              RP2040VREG, RP2040TBMAN, RP2040BUSCTRL, RP2040XIP,
-             RP2040SSI, RP2040IOQSPI, RP2040PADSQSPI, RP2040USB) = _import_misc()
+             RP2040SSI, RP2040IOQSPI, RP2040PADSQSPI, RP2040USB,
+             _RP2040RESETS, _RP2040CLOCKS, _RP2040WATCHDOG) = _import_misc()
 
             # RTC
             self.rtc = RP2040RTC()  # 0x4005C000
