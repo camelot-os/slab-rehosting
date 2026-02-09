@@ -634,16 +634,35 @@ def build_test_cases() -> List[TestCase]:
         ))
 
     # -- nRF52840 (flash at 0x00000000) --
-    for name, fw, mmio in [
-        ("nRF52840 EEPROM", "slab/examples/cortex-m/nrf/nrf52840/peripherals/eeprom/nrf52840_eeprom_test.bin", 5),
-        ("nRF52840 Flash", "slab/examples/cortex-m/nrf/nrf52840/peripherals/flash/nrf52840_flash_test.bin", 2),
-        ("nRF52840 QSPI", "slab/examples/cortex-m/nrf/nrf52840/peripherals/qspi/nrf52840_qspi_test.bin", 5),
-    ]:
+    nrf_tests = [
+        ("nRF52840 EEPROM", "slab/examples/cortex-m/nrf/nrf52840/peripherals/eeprom/nrf52840_eeprom_test.bin",
+         "slab/boards/nrf52840_eeprom.yaml", 5),
+        ("nRF52840 Flash", "slab/examples/cortex-m/nrf/nrf52840/peripherals/flash/nrf52840_flash_test.bin",
+         "slab/boards/nrf52840_flash.yaml", 2),
+        ("nRF52840 QSPI", "slab/examples/cortex-m/nrf/nrf52840/peripherals/qspi/nrf52840_qspi_test.bin",
+         "slab/boards/nrf52840_qspi.yaml", 5),
+    ]
+    for name, fw, board, mmio in nrf_tests:
+        # Direct mode (PeripheralSet only, no external device wiring)
         tests.append(TestCase(
             name=f"{name} [direct]",
             firmware=fw, cpu="cortex-m4", mode="direct", mcu="nRF52840",
             timeout=6, expect_mmio=mmio,
             qemu_extra={"flash-base": "0x00000000"},
+        ))
+        # Board mode (full board YAML with external devices)
+        tests.append(TestCase(
+            name=f"{name} [board]",
+            firmware=fw, cpu="cortex-m4", mode="board",
+            board_yaml=board,
+            timeout=6, expect_mmio=mmio,
+        ))
+        # SHM mode (board via shared memory)
+        tests.append(TestCase(
+            name=f"{name} [shm]",
+            firmware=fw, cpu="cortex-m4", mode="shm",
+            board_yaml=board,
+            timeout=6, expect_mmio=mmio,
         ))
 
     # -- RP2040 (flash at 0x10000000) --

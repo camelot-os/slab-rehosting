@@ -19,10 +19,10 @@ import sys
 import os
 
 # Add the Python modules to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', 'python'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', '..', 'python'))
 
 from slab_nrf import NRF52840PeripheralSet
-from virtual_components import EEPROM_24Cxx
+from slab_cortex_m.virtual_components import EEPROM_24Cxx
 
 
 class TWIMEEPROMBridge:
