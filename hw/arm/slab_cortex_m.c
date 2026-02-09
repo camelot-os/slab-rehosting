@@ -1107,17 +1107,16 @@ static void slab_cortex_m_init(MachineState *machine)
     clock_set_hz(s->sysclk, s->sysclk_hz);
 
     /* ========== BOOTROM SETUP ========== */
+    bool bootrom_at_zero = false;
     if (s->bootrom_file && strlen(s->bootrom_file) > 0) {
         if (s->bootrom_size == 0) {
             s->bootrom_size = 0x10000;  /* 64KB */
-        }
-        if (s->bootrom_base == 0) {
-            s->bootrom_base = 0x1FFF0000;
         }
 
         memory_region_init_rom(&s->bootrom, NULL, "slab.bootrom",
                                s->bootrom_size, &error_fatal);
         memory_region_add_subregion(get_system_memory(), s->bootrom_base, &s->bootrom);
+        bootrom_at_zero = (s->bootrom_base == 0);
     }
 
     /* Initialize Flash memory */
@@ -1126,8 +1125,9 @@ static void slab_cortex_m_init(MachineState *machine)
     memory_region_add_subregion(get_system_memory(), s->flash_base, &s->flash);
 
     /* Flash alias at address 0 for vector table.
-     * Skip when flash is already at 0 (e.g. nRF52840) to avoid overlap. */
-    if (s->flash_base != 0) {
+     * Skip when flash is already at 0 (e.g. nRF52840) or when bootrom
+     * occupies address 0 (e.g. RP2040) to avoid overlap. */
+    if (s->flash_base != 0 && !bootrom_at_zero) {
         memory_region_init_alias(&s->flash_alias, NULL, "slab.flash.alias",
                                  &s->flash, 0, s->flash_size);
         memory_region_add_subregion(get_system_memory(), 0, &s->flash_alias);
@@ -1177,7 +1177,14 @@ static void slab_cortex_m_init(MachineState *machine)
         qdev_prop_set_string(proxy_dev, "shm-name", s->shm_name);
     }
     sysbus_realize(SYS_BUS_DEVICE(proxy_dev), &error_fatal);
-    sysbus_mmio_map(SYS_BUS_DEVICE(proxy_dev), 0, s->periph_base);
+    /*
+     * Map proxy at priority -1 so that flash, SRAM, and bootrom regions
+     * (at priority 0) take precedence in overlapping address ranges.
+     * This allows periph-base to be set below 0x40000000 (e.g. 0x14000000
+     * for RP2040 XIP/SSI) without conflicting with SRAM at 0x20000000.
+     */
+    memory_region_add_subregion_overlap(get_system_memory(), s->periph_base,
+        sysbus_mmio_get_region(SYS_BUS_DEVICE(proxy_dev), 0), -1);
     s->proxy = SLAB_PERIPH_PROXY(proxy_dev);
 
     /* ========== DEBUG PROXY ========== */
@@ -1200,7 +1207,15 @@ static void slab_cortex_m_init(MachineState *machine)
     qdev_prop_set_uint32(armv7m_dev, "num-irq", s->num_irqs);
     qdev_prop_set_string(armv7m_dev, "cpu-type",
                          g_strdup_printf("%s-arm-cpu", s->cpu_type));
-    qdev_prop_set_bit(armv7m_dev, "enable-bitband", true);
+    /*
+     * Bitband is an ARMv7-M feature (Cortex-M3/M4/M7).  It was removed
+     * in ARMv8-M (Cortex-M23/M33/M55/M85).  On ARMv8-M the former
+     * bitband alias region 0x42000000-0x43FFFFFF is used for AHB2
+     * peripherals (e.g. USB OTG HS at 0x42040000 on STM32U5).
+     * Enabling bitband on v8-M would intercept those accesses and
+     * convert them to single-bit operations on the wrong address.
+     */
+    qdev_prop_set_bit(armv7m_dev, "enable-bitband", !is_armv8m);
     qdev_connect_clock_in(armv7m_dev, "cpuclk", s->sysclk);
     object_property_set_link(OBJECT(armv7m_dev), "memory",
                             OBJECT(get_system_memory()), &error_abort);
@@ -1509,6 +1524,70 @@ static void slab_cortex_m_set_ns_flash_size(Object *obj, const char *value, Erro
     s->ns_flash_size = (uint32_t)v;
 }
 
+/* ---- Bootrom layout property getters/setters ---- */
+
+static char *slab_cortex_m_get_bootrom_base(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%08x", s->bootrom_base);
+}
+
+static void slab_cortex_m_set_bootrom_base(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    s->bootrom_base = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_bootrom_size(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%x", s->bootrom_size);
+}
+
+static void slab_cortex_m_set_bootrom_size(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    if (v == 0 || v > 1024 * 1024) {
+        error_setg(errp, "bootrom-size must be between 1 and 1MB");
+        return;
+    }
+    s->bootrom_size = (uint32_t)v;
+}
+
+/* ---- Peripheral proxy range property getters/setters ---- */
+
+static char *slab_cortex_m_get_periph_base(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%08x", s->periph_base);
+}
+
+static void slab_cortex_m_set_periph_base(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    s->periph_base = (uint32_t)v;
+}
+
+static char *slab_cortex_m_get_periph_size(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("0x%x", s->periph_size);
+}
+
+static void slab_cortex_m_set_periph_size(Object *obj, const char *value, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v = strtoull(value, NULL, 0);
+    if (v == 0 || v > 0xC0000000ULL) {
+        error_setg(errp, "periph-size must be between 1 and 3GB");
+        return;
+    }
+    s->periph_size = (uint32_t)v;
+}
+
 static void slab_cortex_m_instance_init(Object *obj)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
@@ -1647,6 +1726,32 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
                                   slab_cortex_m_set_ns_flash_size);
     object_class_property_set_description(oc, "ns-flash-size",
         "Non-secure flash size in bytes (default: 0 = disabled)");
+
+    /* Bootrom layout */
+    object_class_property_add_str(oc, "bootrom-base",
+                                  slab_cortex_m_get_bootrom_base,
+                                  slab_cortex_m_set_bootrom_base);
+    object_class_property_set_description(oc, "bootrom-base",
+        "Bootrom base address (default: 0x1FFF0000, set 0 for RP2040)");
+
+    object_class_property_add_str(oc, "bootrom-size",
+                                  slab_cortex_m_get_bootrom_size,
+                                  slab_cortex_m_set_bootrom_size);
+    object_class_property_set_description(oc, "bootrom-size",
+        "Bootrom size in bytes (default: 0x10000 = 64KB)");
+
+    /* Peripheral proxy range */
+    object_class_property_add_str(oc, "periph-base",
+                                  slab_cortex_m_get_periph_base,
+                                  slab_cortex_m_set_periph_base);
+    object_class_property_set_description(oc, "periph-base",
+        "Peripheral proxy base address (default: 0x40000000)");
+
+    object_class_property_add_str(oc, "periph-size",
+                                  slab_cortex_m_get_periph_size,
+                                  slab_cortex_m_set_periph_size);
+    object_class_property_set_description(oc, "periph-size",
+        "Peripheral proxy region size (default: 0x20000000 = 512MB)");
 }
 
 static const TypeInfo slab_cortex_m_info = {
