@@ -913,3 +913,167 @@ class STM32RCCv4(STM32RCCBase):
                 value |= self.CSR_LSIRDY
 
         self.regs[offset] = value
+
+
+class STM32RCCv5(STM32RCCBase):
+    """
+    STM32U5xx RCC (RM0456).
+
+    Register layout uses CFGR1/CFGR2/CFGR3 and PLL1-PLL3,
+    similar to H5 but with MSIS/MSIK oscillators instead of CSI.
+    All registers stored in self.regs dict; only critical offsets
+    have auto-ready logic.
+    """
+
+    # Register offsets
+    CR = 0x00
+    ICSCR1 = 0x08
+    ICSCR2 = 0x0C
+    ICSCR3 = 0x10
+    CRRCR = 0x18
+    CFGR1 = 0x1C
+    CFGR2 = 0x20
+    CFGR3 = 0x24
+    PLL1CFGR = 0x28
+    PLL2CFGR = 0x2C
+    PLL3CFGR = 0x30
+    PLL1DIVR = 0x34
+    PLL1FRACR = 0x38
+    PLL2DIVR = 0x3C
+    PLL2FRACR = 0x40
+    PLL3DIVR = 0x44
+    PLL3FRACR = 0x48
+    CIER = 0x50
+    CIFR = 0x54
+    CICR = 0x58
+    AHB1ENR = 0x88
+    AHB2ENR1 = 0x8C
+    AHB2ENR2 = 0x90
+    AHB3ENR = 0x94
+    APB1ENR1 = 0x9C
+    APB1ENR2 = 0xA0
+    APB2ENR = 0xA4
+    APB3ENR = 0xA8
+    CCIPR1 = 0xE0
+    CCIPR2 = 0xE4
+    CCIPR3 = 0xE8
+    BDCR = 0xF0
+    CSR = 0xF4
+
+    # CR bits (RM0456 RCC_CR)
+    CR_MSISON = 1 << 0
+    CR_MSIKERON = 1 << 1
+    CR_MSISRDY = 1 << 2
+    CR_MSIKON = 1 << 3
+    CR_MSIPLLMODE = 1 << 4
+    CR_MSIPLLFAST = 1 << 5
+    CR_MSIKRDY = 1 << 7
+    CR_HSION = 1 << 8
+    CR_HSIKERON = 1 << 9
+    CR_HSIRDY = 1 << 10
+    CR_HSI48ON = 1 << 12
+    CR_HSI48RDY = 1 << 13
+    CR_SHSION = 1 << 14
+    CR_SHSIRDY = 1 << 15
+    CR_HSEON = 1 << 16
+    CR_HSERDY = 1 << 17
+    CR_PLL1ON = 1 << 24
+    CR_PLL1RDY = 1 << 25
+    CR_PLL2ON = 1 << 26
+    CR_PLL2RDY = 1 << 27
+    CR_PLL3ON = 1 << 28
+    CR_PLL3RDY = 1 << 29
+
+    # CFGR1 bits (SW 2-bit, SWS at bits 3:2)
+    CFGR1_SW_MASK = 0x3
+    CFGR1_SWS_SHIFT = 2
+    CFGR1_SWS_MASK = 0x3 << 2
+
+    # CFGR2 prescaler ready flags
+    CFGR2_HPREF = 1 << 16
+    CFGR2_PPRE1F = 1 << 17
+    CFGR2_PPRE2F = 1 << 18
+
+    # BDCR bits
+    BDCR_LSEON = 1 << 0
+    BDCR_LSERDY = 1 << 1
+
+    # CSR bits
+    CSR_LSION = 1 << 0
+    CSR_LSIRDY = 1 << 1
+
+    def __init__(self, base: int = 0x46020C00):
+        super().__init__("RCC", base, 0x400)
+        self.hsi_freq = 16_000_000
+        self.msi_freq = 4_000_000
+        self._init_regs()
+
+    def _init_regs(self):
+        """Initialize with reset defaults."""
+        # CR: MSIS on and ready at reset (RM0456 reset value = 0x00000035)
+        self.regs[self.CR] = (
+            self.CR_MSISON | self.CR_MSISRDY |
+            self.CR_MSIKON | self.CR_MSIKRDY |
+            self.CR_MSIPLLMODE | self.CR_MSIPLLFAST
+        )
+        self.regs[self.ICSCR1] = 0x44000000  # MSIRANGE=4 (4MHz)
+        self.regs[self.CFGR1] = 0
+        self.regs[self.CFGR2] = 0
+        self.regs[self.CFGR3] = 0
+        self.regs[self.BDCR] = 0
+        self.regs[self.CSR] = self.CSR_LSION | self.CSR_LSIRDY
+
+    def _read_reg(self, offset: int, size: int) -> int:
+        value = self.regs.get(offset, 0)
+
+        if offset == self.CR:
+            value = self._apply_cr_ready(value)
+        elif offset == self.CFGR2:
+            # Auto-set prescaler ready flags (instant)
+            value |= self.CFGR2_HPREF | self.CFGR2_PPRE1F | self.CFGR2_PPRE2F
+        elif offset == self.BDCR:
+            if value & self.BDCR_LSEON:
+                value |= self.BDCR_LSERDY
+        elif offset == self.CSR:
+            if value & self.CSR_LSION:
+                value |= self.CSR_LSIRDY
+
+        return value
+
+    def _write_reg(self, offset: int, size: int, value: int):
+        if offset == self.CR:
+            value = self._apply_cr_ready(value)
+        elif offset == self.CFGR1:
+            # Auto-update SWS to match SW (instant clock switch)
+            sw = value & self.CFGR1_SW_MASK
+            value = (value & ~self.CFGR1_SWS_MASK) | (sw << self.CFGR1_SWS_SHIFT)
+        elif offset == self.BDCR:
+            if value & self.BDCR_LSEON:
+                value |= self.BDCR_LSERDY
+        elif offset == self.CSR:
+            if value & self.CSR_LSION:
+                value |= self.CSR_LSIRDY
+
+        self.regs[offset] = value
+
+    def _apply_cr_ready(self, cr: int) -> int:
+        """Auto-set ready bits for enabled oscillators."""
+        if cr & self.CR_MSISON:
+            cr |= self.CR_MSISRDY
+        if cr & self.CR_MSIKON:
+            cr |= self.CR_MSIKRDY
+        if cr & self.CR_HSION:
+            cr |= self.CR_HSIRDY
+        if cr & self.CR_HSI48ON:
+            cr |= self.CR_HSI48RDY
+        if cr & self.CR_SHSION:
+            cr |= self.CR_SHSIRDY
+        if cr & self.CR_HSEON:
+            cr |= self.CR_HSERDY
+        if cr & self.CR_PLL1ON:
+            cr |= self.CR_PLL1RDY
+        if cr & self.CR_PLL2ON:
+            cr |= self.CR_PLL2RDY
+        if cr & self.CR_PLL3ON:
+            cr |= self.CR_PLL3RDY
+        return cr

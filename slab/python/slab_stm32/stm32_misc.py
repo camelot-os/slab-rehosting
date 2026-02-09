@@ -805,3 +805,69 @@ class STM32DBG(STM32Peripheral):
             self.apb1fzr2 = value
         elif offset == self.APB2FZR:
             self.apb2fzr = value
+
+
+class STM32OTP(STM32Peripheral):
+    """
+    STM32 OTP / System Information area.
+
+    Read-only area containing factory-programmed data:
+    - Unique Device ID (96-bit UID)
+    - Flash size
+    - Package type
+
+    Address layout varies by family (offsets from OTP base):
+      U5: OTP=0x0BFA0000, PACKAGE=+0x500, UID=+0x700, FLASHSIZE=+0x7A0
+      H5: OTP=0x08FFF000, UID=+0x800, FLASHSIZE=+0x7A0
+      L4: OTP=0x1FFF7000, UID=+0x590, FLASHSIZE=+0x5E0
+      F4: OTP=0x1FFF7000, UID=+0xA10, FLASHSIZE=+0x22C
+    """
+
+    # Per-family configurations: (otp_base, uid_offset, flashsize_offset, pkg_offset)
+    FAMILY_CONFIG = {
+        "U5": (0x0BFA0000, 0x700, 0x7A0, 0x500),
+        "H5": (0x08FFF000, 0x800, 0x7A0, None),
+        "L4": (0x1FFF7000, 0x590, 0x5E0, None),
+        "F4": (0x1FFF7000, 0xA10, 0x22C, None),
+    }
+
+    def __init__(self, family: str = "U5", flash_size_kb: int = 4096,
+                 uid: tuple = None):
+        cfg = self.FAMILY_CONFIG.get(family, self.FAMILY_CONFIG["F4"])
+        base = cfg[0]
+        super().__init__("OTP", base, 0x1000)
+
+        self._uid_offset = cfg[1]
+        self._flashsize_offset = cfg[2]
+        self._pkg_offset = cfg[3]
+
+        # 96-bit UID (3 x 32-bit words)
+        if uid is not None:
+            self.uid = tuple(uid)
+        else:
+            self.uid = (0x00440028, 0x32345109, 0x57005700)
+
+        # Flash size in KB (16-bit)
+        self.flash_size_kb = flash_size_kb
+
+        # Package type
+        self.package = 0x0007  # LQFP144
+
+    def _read_reg(self, offset: int, size: int) -> int:
+        # UID: 3 x 32-bit at uid_offset, uid_offset+4, uid_offset+8
+        if self._uid_offset <= offset < self._uid_offset + 12:
+            word_idx = (offset - self._uid_offset) // 4
+            return self.uid[word_idx]
+
+        # Flash size: 16-bit at flashsize_offset
+        if offset == self._flashsize_offset:
+            return self.flash_size_kb & 0xFFFF
+
+        # Package: 16-bit at pkg_offset
+        if self._pkg_offset is not None and offset == self._pkg_offset:
+            return self.package & 0xFFFF
+
+        return 0
+
+    def _write_reg(self, offset: int, size: int, value: int):
+        pass  # OTP is read-only

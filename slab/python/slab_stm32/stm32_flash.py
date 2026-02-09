@@ -425,10 +425,16 @@ class STM32FLASHv3(STM32Peripheral):
         super().__init__("FLASH", base, 0x400)
         self.family = family
 
-        # H5 uses different register offsets (RM0481)
+        # H5/U5 use different register offsets (RM0481/RM0456)
         if family == "H5":
             self.KEYR = 0x04      # NSKEYR
             self.OPTKEYR = 0x0C
+            self.SR = 0x20        # NSSR
+            self.CR = 0x28        # NSCR
+            self.ECCR = 0x30
+            self.OPTR = 0x40
+        elif family == "U5":
+            self.OPTKEYR = 0x10   # RM0456: offset 0x10 (not 0x0C)
             self.SR = 0x20        # NSSR
             self.CR = 0x28        # NSCR
             self.ECCR = 0x30
@@ -524,6 +530,13 @@ class STM32FLASHv3(STM32Peripheral):
             elif value & self.CR_MER2:
                 self._mass_erase(1)
             self.cr &= ~self.CR_STRT
+            self.sr |= self.SR_EOP
+
+        # PG (program): data writes bypass the peripheral proxy and go directly
+        # to QEMU flash ROM.  Set EOP immediately so the HAL's
+        # FLASH_WaitForLastOperation() sees completion without needing to
+        # intercept the actual data writes.
+        if value & self.CR_PG:
             self.sr |= self.SR_EOP
 
     def _page_erase(self, page: int, bank: int):

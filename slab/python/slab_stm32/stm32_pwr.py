@@ -184,6 +184,36 @@ class STM32PWRv2(STM32Peripheral):
     H5_VOSSR_ACTVOSRDY = 1 << 13  # Active VOS ready
     H5_VOSSR_ACTVOS = 0x3 << 14   # Active VOS level
 
+    # U5-specific register offsets (RM0456)
+    # CR1-CR3 at 0x00-0x08 same as L4, but 0x0C is VOSR (not CR4)
+    U5_VOSR = 0x0C      # Voltage Output Scaling Register
+    U5_SVMCR = 0x10     # Supply Voltage Monitoring Control
+    U5_WUCR1 = 0x14     # Wakeup Control 1
+    U5_WUCR2 = 0x18     # Wakeup Control 2
+    U5_WUCR3 = 0x1C     # Wakeup Control 3
+    U5_BDCR1 = 0x20     # Backup Domain Control 1
+    U5_BDCR2 = 0x24     # Backup Domain Control 2
+    U5_DBPR = 0x28       # Disable Backup Protection
+    U5_UCPDR = 0x2C      # USB Type-C / PD
+    U5_SECCFGR = 0x30   # Security config
+    U5_PRIVCFGR = 0x34  # Privilege config
+    U5_SR = 0x38         # Status
+    U5_SVMSR = 0x3C      # Supply Voltage Monitoring Status
+    U5_BDSR = 0x40       # Backup Domain Status
+    U5_WUSR = 0x44       # Wakeup Status
+    U5_WUSCR = 0x48      # Wakeup Status Clear
+
+    # U5 VOSR bits (RM0456)
+    U5_VOSR_BOOSTRDY = 1 << 14    # EPOD booster ready (read-only)
+    U5_VOSR_VOSRDY = 1 << 15      # VOS ready (read-only)
+    U5_VOSR_VOS = 0x3 << 16       # Voltage scaling (bits 17:16)
+    U5_VOSR_BOOSTEN = 1 << 18     # EPOD booster enable
+
+    # U5 SVMSR bits
+    U5_SVMSR_REGS = 1 << 1        # Regulator ready
+    U5_SVMSR_ACTVOS = 0x3 << 4    # Active VOS level (bits 5:4)
+    U5_SVMSR_ACTVOSRDY = 1 << 15  # Active VOS ready
+
     def __init__(self, base: int = 0x40007000, family: str = "L4"):
         super().__init__("PWR", base, 0x400)
         self.family = family
@@ -202,6 +232,18 @@ class STM32PWRv2(STM32Peripheral):
             self.sccr = 0
             self.vmcr = 0
             self.vmsr = 0
+        elif family == "U5":
+            # U5: CR1-CR3 same as L4, VOSR replaces CR4
+            self.cr1 = 0
+            self.cr2 = 0
+            self.cr3 = 0
+            self.vosr = 0          # VOSR at offset 0x0C
+            self.svmcr = 0         # SVMCR at offset 0x10
+            self.svmsr = 0         # SVMSR at offset 0x3C (read via getter)
+            self.bdcr1 = 0
+            self.bdcr2 = 0
+            self.dbpr = 0
+            self.sr1 = 0
         else:
             # L4/H7 registers
             self.cr1 = 0x0200  # VOS = Range 1
@@ -218,6 +260,8 @@ class STM32PWRv2(STM32Peripheral):
     def _read_reg(self, offset: int, size: int) -> int:
         if self.family == "H5":
             return self._read_reg_h5(offset, size)
+        elif self.family == "U5":
+            return self._read_reg_u5(offset, size)
 
         if offset == self.CR1:
             return self.cr1
@@ -265,6 +309,8 @@ class STM32PWRv2(STM32Peripheral):
     def _write_reg(self, offset: int, size: int, value: int):
         if self.family == "H5":
             return self._write_reg_h5(offset, size, value)
+        elif self.family == "U5":
+            return self._write_reg_u5(offset, size, value)
 
         if offset == self.CR1:
             self.cr1 = value
@@ -301,6 +347,69 @@ class STM32PWRv2(STM32Peripheral):
             self.sccr = value
         elif offset == self.H5_VMCR:
             self.vmcr = value
+
+    def _read_reg_u5(self, offset: int, size: int) -> int:
+        """Read U5-specific PWR registers (RM0456)."""
+        if offset == self.CR1:
+            return self.cr1
+        elif offset == self.CR2:
+            return self.cr2
+        elif offset == self.CR3:
+            return self.cr3
+        elif offset == self.U5_VOSR:
+            return self.vosr
+        elif offset == self.U5_SVMCR:
+            return self.svmcr
+        elif offset == self.U5_SR:
+            return self.sr1
+        elif offset == self.U5_SVMSR:
+            return self._get_svmsr_u5()
+        elif offset == self.U5_BDCR1:
+            return self.bdcr1
+        elif offset == self.U5_BDCR2:
+            return self.bdcr2
+        elif offset == self.U5_DBPR:
+            return self.dbpr
+        elif offset == self.U5_BDSR:
+            return 0
+        elif offset == self.U5_WUSR:
+            return 0
+        return 0
+
+    def _write_reg_u5(self, offset: int, size: int, value: int):
+        """Write U5-specific PWR registers (RM0456)."""
+        if offset == self.CR1:
+            self.cr1 = value
+        elif offset == self.CR2:
+            self.cr2 = value
+        elif offset == self.CR3:
+            self.cr3 = value
+        elif offset == self.U5_VOSR:
+            # Auto-set VOSRDY and BOOSTRDY (instant in emulation)
+            self.vosr = value | self.U5_VOSR_VOSRDY | self.U5_VOSR_BOOSTRDY
+        elif offset == self.U5_SVMCR:
+            self.svmcr = value
+        elif offset == self.U5_BDCR1:
+            self.bdcr1 = value
+        elif offset == self.U5_BDCR2:
+            self.bdcr2 = value
+        elif offset == self.U5_DBPR:
+            self.dbpr = value
+        elif offset == self.U5_WUSCR:
+            # Clear wakeup flags
+            self.sr1 &= ~(value & 0x1F)
+
+    def _get_svmsr_u5(self) -> int:
+        """Get U5 SVMSR with ready bits auto-set."""
+        val = self.svmsr
+        # REGS (bit 1) - regulator ready
+        val |= self.U5_SVMSR_REGS
+        # ACTVOSRDY (bit 15) - active VOS ready
+        val |= self.U5_SVMSR_ACTVOSRDY
+        # ACTVOS (bits 5:4) mirrors VOS from VOSR (bits 17:16)
+        vos = (self.vosr >> 16) & 0x3
+        val = (val & ~self.U5_SVMSR_ACTVOS) | (vos << 4)
+        return val
 
     def _get_sr2(self) -> int:
         sr2 = self.sr2
