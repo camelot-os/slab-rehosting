@@ -45,12 +45,18 @@ A generic ARM Cortex-M machine that:
 
    Options:
      cpu-type=<type>       CPU model (cortex-m0 to cortex-m85)
-     flash-base=<addr>     Flash base address
-     flash-size=<size>     Flash size in bytes
-     sram-base=<addr>      SRAM base address
-     sram-size=<size>      SRAM size in bytes
-     tcp-port=<port>       Peripheral proxy port (default: 5000)
-     proxy-mode=<mode>     tcp or shm
+     flash-base=<addr>     Flash base address (default: 0x08000000)
+     flash-size=<size>     Flash size in bytes (default: 1MB)
+     sram-base=<addr>      SRAM base address (default: 0x20000000)
+     sram-size=<size>      SRAM size in bytes (default: 256KB)
+     bootrom-base=<addr>   Bootrom base address (default: 0x1FFF0000)
+     bootrom-size=<size>   Bootrom size in bytes (default: 64KB)
+     periph-base=<addr>    Peripheral proxy range base (default: 0x40000000)
+     periph-size=<size>    Peripheral proxy range size (default: 512MB)
+     tcp-port=<port>       Peripheral proxy port (default: 5555)
+     shm-name=<name>       POSIX SHM name (enables SHM mode)
+     sysclk-hz=<freq>      System clock frequency hint
+     usbip-port=<port>     USBIP server port (in-QEMU USB bridge)
      trustzone=on/off      Enable TrustZone (ARMv8-M only)
      dual-core=on/off      Enable second CPU core
 
@@ -61,17 +67,23 @@ Binary protocol connecting QEMU to Python:
 
 .. code-block:: text
 
-   Request Format (9 bytes):
-   ┌──────┬──────────┬──────────┬──────────┐
-   │ Cmd  │ Address  │  Size    │  Value   │
-   │ 1B   │   4B     │   4B     │   4B     │
-   └──────┴──────────┴──────────┴──────────┘
+   Read Request (14 bytes):
+   +------+----------+----------+--------+----------+
+   | Cmd  | Address  |  Size    | Secure |    PC    |
+   | 1B   |   4B     |   4B     |   1B   |    4B    |
+   +------+----------+----------+--------+----------+
 
-   Response Format (5 bytes):
-   ┌──────────┬────────┐
-   │  Value   │ Status │
-   │   4B     │   1B   │
-   └──────────┴────────┘
+   Write Request (18 bytes):
+   +------+----------+----------+----------+--------+----------+
+   | Cmd  | Address  |  Size    |  Value   | Secure |    PC    |
+   | 1B   |   4B     |   4B     |   4B     |   1B   |    4B    |
+   +------+----------+----------+----------+--------+----------+
+
+   Response (5 bytes):
+   +----------+--------+
+   |  Value   | Status |
+   |   4B     |   1B   |
+   +----------+--------+
 
 **Commands:**
 
@@ -131,14 +143,11 @@ Latency Characteristics
      - Latency
      - Use Case
    * - TCP (localhost)
-     - ~45 μs
-     - Remote debugging, distributed
+     - ~62 us
+     - Remote debugging, distributed (~16K ops/sec)
    * - POSIX SHM
-     - ~3 μs
-     - High-performance local emulation
-   * - In-QEMU (no proxy)
-     - ~0.1 μs
-     - Baseline (not recommended)
+     - ~26 us
+     - High-performance local emulation (~39K ops/sec)
 
 Peripheral Model
 ================

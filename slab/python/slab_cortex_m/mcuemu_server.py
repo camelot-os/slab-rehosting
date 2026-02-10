@@ -7,12 +7,13 @@
 ║  Each peripheral is configurable via YAML/JSON config files.                 ║
 ║                                                                              ║
 ║  Protocol (binary, little-endian):                                           ║
-║    Request: [R/W:1][Addr:4][Size:4][Value:4 if write]                       ║
-║    Response: [Value:4][Status:1]                                             ║
-║    IRQ: [I:1][IRQ#:4][Level:1]                                              ║
+║    Read:  [R/S:1][Addr:4][Size:4][Secure:1][PC:4] = 14 bytes               ║
+║    Write: [W/T:1][Addr:4][Size:4][Value:4][Secure:1][PC:4] = 18 bytes      ║
+║    Response: [Value:4][Status:1] = 5 bytes                                  ║
+║    IRQ: [I:1][IRQ#:4][Level:1] = 6 bytes                                   ║
 ║                                                                              ║
 ║  Usage:                                                                      ║
-║    python3 mcuemu_periph_server.py --port 5000 --config stm32f4.yaml        ║
+║    python3 mcuemu_server.py --port 5555 --config stm32f4.yaml              ║
 ║                                                                              ║
 ║  Author: Mathieu Renard <mathieu.renard@twistedwires.io>                                           ║
 ╚══════════════════════════════════════════════════════════════════════════════╝

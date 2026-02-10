@@ -253,9 +253,14 @@ Start the peripheral server:
 .. code-block:: bash
 
    PYTHONPATH=slab/python python3 -c "
-   from slab_stm32 import STM32F4PeripheralSet
-   from slab_cortex_m.mcuemu_server import run_server
-   run_server(STM32F4PeripheralSet(), port=5000)
+   from slab_stm32 import STM32F4xxPeripheralSet
+   from slab_cortex_m.mcuemu_server import MCUemuServer
+   import asyncio
+
+   server = MCUemuServer(port=5555)
+   server.peripheral_set = STM32F4xxPeripheralSet()
+   server.create_peripherals()
+   asyncio.run(server.start())
    "
 
 Start QEMU:
@@ -263,7 +268,7 @@ Start QEMU:
 .. code-block:: bash
 
    ./build/qemu-system-arm \
-       -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5000 \
+       -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
        -kernel firmware.bin \
        -nographic
 
@@ -291,7 +296,7 @@ Here's a self-contained script that runs the full emulation:
    import sys
    sys.path.insert(0, "slab/python")
 
-   from slab_stm32 import STM32F4PeripheralSet
+   from slab_stm32 import STM32F4xxPeripheralSet
 
    QEMU_BIN = "build/qemu-system-arm"
    FIRMWARE = "firmware.bin"
@@ -302,21 +307,21 @@ Here's a self-contained script that runs the full emulation:
        ops = 0
        try:
            while True:
-               hdr = await reader.read(9)
-               if len(hdr) < 9:
+               cmd_data = await reader.read(1)
+               if not cmd_data:
                    break
+               cmd = cmd_data[0]
 
-               cmd = hdr[0]
-               addr = int.from_bytes(hdr[1:5], "little")
-               sz = int.from_bytes(hdr[5:9], "little")
-
-               if cmd in (82, 83):  # Read
-                   await reader.read(1)
+               if cmd in (0x52, 0x53):  # Read ('R' or 'S')
+                   data = await reader.readexactly(13)
+                   addr, sz = struct.unpack('<II', data[:8])
+                   secure = (cmd == 0x53) or (data[8] == 1)
                    val, status = ps.read(addr, sz)
                    writer.write(struct.pack('<IB', val, status))
-               else:  # Write
-                   data = await reader.read(5)
-                   val = int.from_bytes(data[:4], "little")
+               elif cmd in (0x57, 0x54):  # Write ('W' or 'T')
+                   data = await reader.readexactly(17)
+                   addr, sz, val = struct.unpack('<III', data[:12])
+                   secure = (cmd == 0x54) or (data[12] == 1)
                    status = ps.write(addr, sz, val)
                    writer.write(struct.pack('<IB', 0, status))
 
@@ -326,7 +331,7 @@ Here's a self-contained script that runs the full emulation:
            print(f"Total operations: {ops}")
 
    async def main():
-       ps = STM32F4PeripheralSet()
+       ps = STM32F4xxPeripheralSet()
 
        server = await asyncio.start_server(
            lambda r, w: handle_qemu(r, w, ps),
@@ -334,8 +339,8 @@ Here's a self-contained script that runs the full emulation:
        )
 
        proc = subprocess.Popen([
-           QEMU_BIN, "-M", "slab-cortex-m",
-           "-cpu", "cortex-m4",
+           QEMU_BIN,
+           "-M", f"slab-cortex-m,cpu-type=cortex-m4,tcp-port={TCP_PORT}",
            "-kernel", FIRMWARE,
            "-nographic",
        ])

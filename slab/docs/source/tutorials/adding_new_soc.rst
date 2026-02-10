@@ -28,7 +28,7 @@ Prerequisites
 Before starting, make sure you have:
 
 - A working SLAB development environment (see :ref:`quickstart`)
-- Python 3.8+ with ``pyyaml`` installed
+- Python 3.10+ with ``pyyaml`` installed
 - A built QEMU with the ``slab-cortex-m`` machine (``./build/qemu-system-arm``)
 - The compiled firmware binary (``.bin``) you intend to emulate
 
