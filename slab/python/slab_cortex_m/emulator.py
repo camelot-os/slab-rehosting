@@ -38,6 +38,7 @@ class CortexMConfig:
     machine: str                                  # MCU name: "STM32F405", "nRF52840"
     firmware_path: Optional[str] = None
     port: int = 5555
+    gdb_port: int = 0                             # 0 = disabled
     trace_mmio: bool = False
     board_yaml: Optional[str] = None              # Optional board YAML path
     qemu_path: str = "build/qemu-system-arm"
@@ -69,6 +70,7 @@ class CortexM:
         self.board = None
         self.server = None
         self.qemu_process = None
+        self._gdb = None
         self._running = False
         self._server_thread = None
         self._loop = None
@@ -103,6 +105,13 @@ class CortexM:
 
     def stop(self):
         """Stop QEMU process and peripheral server."""
+        if self._gdb:
+            try:
+                self._gdb.disconnect()
+            except Exception:
+                pass
+            self._gdb = None
+
         if self.qemu_process:
             try:
                 self.qemu_process.terminate()
@@ -177,17 +186,43 @@ class CortexM:
             self.board.write(addr, size, value, secure=True)
 
     def read_register(self, name: str) -> int:
-        """
-        Read CPU register.
-
-        In board-only mode this is not supported (would require GDB stub).
-        Returns 0 as placeholder.
-        """
+        """Read CPU register via GDB stub. Returns 0 when GDB is not connected."""
+        if self._gdb:
+            return self._gdb.read_register(name)
         return 0
 
     def write_register(self, name: str, value: int):
-        """Write CPU register (not supported in board-only mode)."""
-        pass
+        """Write CPU register via GDB stub."""
+        if self._gdb:
+            self._gdb.write_register(name, value)
+
+    def halt(self):
+        """Halt CPU execution via GDB stub."""
+        if self._gdb:
+            self._gdb.halt()
+
+    def resume(self):
+        """Resume CPU execution via GDB stub."""
+        if self._gdb:
+            self._gdb.resume()
+
+    def step(self) -> int:
+        """Single-step CPU via GDB stub. Returns new PC value."""
+        if self._gdb:
+            return self._gdb.step()
+        return 0
+
+    def set_breakpoint(self, addr: int) -> bool:
+        """Set hardware breakpoint via GDB stub."""
+        if self._gdb:
+            return self._gdb.set_breakpoint(addr)
+        return False
+
+    def remove_breakpoint(self, addr: int) -> bool:
+        """Remove hardware breakpoint via GDB stub."""
+        if self._gdb:
+            return self._gdb.remove_breakpoint(addr)
+        return False
 
     def get_state(self) -> dict:
         """Return emulator state as a dict."""
@@ -316,6 +351,10 @@ class CortexM:
             # Append to machine properties
             cmd[2] += f',{key}={val}'
 
+        # Enable GDB stub
+        if self.config.gdb_port > 0:
+            cmd += ['-gdb', f'tcp::{self.config.gdb_port}']
+
         try:
             self.qemu_process = subprocess.Popen(
                 cmd,
@@ -326,6 +365,23 @@ class CortexM:
         except FileNotFoundError:
             log.warning("QEMU binary not found: %s", self.config.qemu_path)
             self.qemu_process = None
+
+        # Connect GDB client
+        if self.qemu_process and self.config.gdb_port > 0:
+            import time
+            time.sleep(0.5)
+            try:
+                from slab_hw.hil import GDBTarget
+                self._gdb = GDBTarget(port=self.config.gdb_port)
+                if not self._gdb.connect():
+                    log.warning("GDB connection failed on port %d",
+                                self.config.gdb_port)
+                    self._gdb = None
+                else:
+                    log.info("GDB connected on port %d", self.config.gdb_port)
+            except Exception as e:
+                log.warning("GDB setup failed: %s", e)
+                self._gdb = None
 
 
 # Alias for hil.py compatibility
