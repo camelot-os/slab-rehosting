@@ -60,6 +60,7 @@
 #include "qemu/main-loop.h"
 #include "qom/object.h"
 #include "qemu/timer.h"
+#include "qemu/cutils.h"
 
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -264,6 +265,7 @@ static void slab_proxy_sync_mpu_state(SlabPeriphProxyState *s)
 {
     ARMCPU *cpu;
     CPUARMState *env;
+    /* volatile: cross-process shared memory access */
     volatile uint32_t *mpu_area;
     int i;
 
@@ -278,14 +280,17 @@ static void slab_proxy_sync_mpu_state(SlabPeriphProxyState *s)
     env = &cpu->env;
 
     /* Point to MPU state area in SHM */
-    mpu_area = (volatile uint32_t *)((uint8_t *)s->shm_ptr + SHM_MPU_OFFSET);
+    mpu_area = (volatile uint32_t *)((uint8_t *)s->shm_ptr
+                                     + SHM_MPU_OFFSET);
 
     /* Write MPU_CTRL */
     mpu_area[0] = env->v7m.mpu_ctrl[0];  /* M_REG_NS bank */
 
-    /* Write per-region RBAR + RASR/RLAR.
+    /*
+     * Write per-region RBAR + RASR/RLAR.
      * PMSAv7 (Cortex-M3/M4/M7): drbar/drsr/dracr arrays
-     * PMSAv8 (Cortex-M23/M33/M55): rbar[bank]/rlar[bank] arrays */
+     * PMSAv8 (Cortex-M23/M33/M55): rbar[bank]/rlar[bank] arrays
+     */
     if (env->pmsav7.drbar) {
         /* PMSAv7 */
         for (i = 0; i < SHM_MPU_MAX_REGIONS && i < cpu->pmsav7_dregion; i++) {
@@ -327,6 +332,7 @@ static void slab_proxy_save_snapshot(SlabPeriphProxyState *s)
 {
     ARMCPU *cpu;
     CPUARMState *env;
+    /* volatile: cross-process shared memory access */
     volatile uint32_t *snap;
     int i;
 
@@ -340,12 +346,16 @@ static void slab_proxy_save_snapshot(SlabPeriphProxyState *s)
     }
     env = &cpu->env;
 
-    snap = (volatile uint32_t *)((uint8_t *)s->shm_ptr + SHM_SNAPSHOT_OFFSET);
+    snap = (volatile uint32_t *)((uint8_t *)s->shm_ptr
+                                 + SHM_SNAPSHOT_OFFSET);
 
     /* Header: architecture + register count */
     snap[0] = 0;   /* ARCH_ARM_CORTEX_M */
-    snap[1] = 23;  /* Core registers (R0-R12, SP, LR, PC, xPSR, MSP, PSP,
-                      CONTROL, PRIMASK, FAULTMASK, BASEPRI) */
+    /*
+     * Core registers: R0-R12, SP, LR, PC, xPSR, MSP, PSP,
+     * CONTROL, PRIMASK, FAULTMASK, BASEPRI
+     */
+    snap[1] = 23;
 
     /* General purpose registers R0-R12 */
     for (i = 0; i < 13; i++) {
@@ -389,6 +399,7 @@ static void slab_proxy_restore_snapshot(SlabPeriphProxyState *s)
 {
     ARMCPU *cpu;
     CPUARMState *env;
+    /* volatile: cross-process shared memory access */
     volatile uint32_t *snap;
     int i;
 
@@ -402,7 +413,8 @@ static void slab_proxy_restore_snapshot(SlabPeriphProxyState *s)
     }
     env = &cpu->env;
 
-    snap = (volatile uint32_t *)((uint8_t *)s->shm_ptr + SHM_SNAPSHOT_OFFSET);
+    snap = (volatile uint32_t *)((uint8_t *)s->shm_ptr
+                                 + SHM_SNAPSHOT_OFFSET);
 
     /* Verify architecture */
     if (snap[0] != 0) {  /* Must be ARCH_ARM_CORTEX_M */
@@ -722,6 +734,7 @@ static const MemoryRegionOps slab_proxy_ops = {
  */
 static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s)
 {
+    /* volatile: cross-process shared memory access */
     volatile uint32_t *header;
     uint32_t irq_status;
 
@@ -762,8 +775,10 @@ static void slab_proxy_shm_irq_timer(void *opaque)
 
     slab_proxy_shm_check_irqs(s);
 
-    /* When CPU is in WFI, poll aggressively for low wake-up latency.
-     * The CPU is sleeping so there's no instruction waste. */
+    /*
+     * When CPU is in WFI, poll aggressively for low wake-up latency.
+     * The CPU is sleeping so there's no instruction waste.
+     */
     interval_us = (first_cpu && first_cpu->halted)
                   ? SHM_IRQ_POLL_WFI_US : SHM_IRQ_POLL_US;
 
@@ -1044,8 +1059,10 @@ static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s)
     s->recv_needed = 0;
     s->response_ready = false;
 
-    /* Register FD handler so QEMU main loop calls us when data arrives.
-     * This is critical for IRQ delivery when firmware is idle. */
+    /*
+     * Register FD handler so QEMU main loop calls us when
+     * data arrives.  Critical for IRQ delivery when idle.
+     */
     qemu_set_fd_handler(fd, slab_proxy_fd_read, NULL, s);
 
     info_report("Slab Proxy [%s]: Connected to TCP 127.0.0.1:%d",
@@ -1198,9 +1215,11 @@ static void slab_cortex_m_init(MachineState *machine)
     DeviceState *proxy_dev;
     bool is_armv8m = false;
 
-    /* Apply defaults (only for fields that can't be zero).
+    /*
+     * Apply defaults (only for fields that can't be zero).
      * Memory layout defaults are set in instance_init() to allow
-     * flash_base=0 (e.g. nRF52840). */
+     * flash_base=0 (e.g. nRF52840).
+     */
     if (!s->cpu_type || strlen(s->cpu_type) == 0) {
         s->cpu_type = g_strdup("cortex-m4");
     }
@@ -1323,7 +1342,9 @@ static void slab_cortex_m_init(MachineState *machine)
     /* ========== DEBUG PROXY ========== */
     if (s->debug_proxy) {
         DeviceState *dbg_proxy_dev = qdev_new(TYPE_SLAB_PERIPH_PROXY);
-        object_property_add_child(OBJECT(machine), "debug-proxy-dev", OBJECT(dbg_proxy_dev));
+        object_property_add_child(OBJECT(machine),
+                                  "debug-proxy-dev",
+                                  OBJECT(dbg_proxy_dev));
         qdev_prop_set_uint32(dbg_proxy_dev, "base", ARM_PPB_BASE);
         qdev_prop_set_uint32(dbg_proxy_dev, "size", ARM_PPB_SIZE);
         qdev_prop_set_int32(dbg_proxy_dev, "tcp-port", s->tcp_port);
@@ -1445,7 +1466,9 @@ static char *slab_cortex_m_get_cpu_type(Object *obj, Error **errp)
     return g_strdup(s->cpu_type ? s->cpu_type : "cortex-m4");
 }
 
-static void slab_cortex_m_set_cpu_type(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_cpu_type(Object *obj,
+                                       const char *value,
+                                       Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
     g_free(s->cpu_type);
@@ -1458,7 +1481,9 @@ static char *slab_cortex_m_get_bootrom(Object *obj, Error **errp)
     return g_strdup(s->bootrom_file ? s->bootrom_file : "");
 }
 
-static void slab_cortex_m_set_bootrom(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_bootrom(Object *obj,
+                                      const char *value,
+                                      Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
     g_free(s->bootrom_file);
@@ -1471,7 +1496,9 @@ static char *slab_cortex_m_get_shm_name(Object *obj, Error **errp)
     return g_strdup(s->shm_name ? s->shm_name : "");
 }
 
-static void slab_cortex_m_set_shm_name(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_shm_name(Object *obj,
+                                       const char *value,
+                                       Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
     g_free(s->shm_name);
@@ -1508,7 +1535,8 @@ static bool slab_cortex_m_get_debug_proxy(Object *obj, Error **errp)
     return s->debug_proxy;
 }
 
-static void slab_cortex_m_set_debug_proxy(Object *obj, bool value, Error **errp)
+static void slab_cortex_m_set_debug_proxy(Object *obj, bool value,
+                                          Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
     s->debug_proxy = value;
@@ -1520,10 +1548,17 @@ static char *slab_cortex_m_get_tcp_port(Object *obj, Error **errp)
     return g_strdup_printf("%d", s->tcp_port);
 }
 
-static void slab_cortex_m_set_tcp_port(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_tcp_port(Object *obj,
+                                       const char *value,
+                                       Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    int port = atoi(value);
+    long port;
+
+    if (qemu_strtol(value, NULL, 10, &port)) {
+        error_setg(errp, "Invalid tcp-port value: '%s'", value);
+        return;
+    }
     if (port <= 0 || port > 65535) {
         error_setg(errp, "tcp-port must be between 1 and 65535");
         return;
@@ -1537,12 +1572,20 @@ static char *slab_cortex_m_get_usbip_port(Object *obj, Error **errp)
     return g_strdup_printf("%d", s->usbip_port);
 }
 
-static void slab_cortex_m_set_usbip_port(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_usbip_port(Object *obj,
+                                         const char *value,
+                                         Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    int port = atoi(value);
+    long port;
+
+    if (qemu_strtol(value, NULL, 10, &port)) {
+        error_setg(errp, "Invalid usbip-port value: '%s'", value);
+        return;
+    }
     if (port < 0 || port > 65535) {
-        error_setg(errp, "usbip-port must be between 0 and 65535 (0 = disabled)");
+        error_setg(errp,
+                   "usbip-port must be 0-65535 (0 = disabled)");
         return;
     }
     s->usbip_port = port;
@@ -1556,10 +1599,17 @@ static char *slab_cortex_m_get_flash_base(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", s->flash_base);
 }
 
-static void slab_cortex_m_set_flash_base(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_flash_base(Object *obj,
+                                         const char *value,
+                                         Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid flash-base: '%s'", value);
+        return;
+    }
     s->flash_base = (uint32_t)v;
 }
 
@@ -1569,10 +1619,17 @@ static char *slab_cortex_m_get_flash_size(Object *obj, Error **errp)
     return g_strdup_printf("0x%x", s->flash_size);
 }
 
-static void slab_cortex_m_set_flash_size(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_flash_size(Object *obj,
+                                         const char *value,
+                                         Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid flash-size: '%s'", value);
+        return;
+    }
     if (v == 0 || v > 64 * 1024 * 1024) {
         error_setg(errp, "flash-size must be between 1 and 64MB");
         return;
@@ -1586,10 +1643,17 @@ static char *slab_cortex_m_get_sram_base(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", s->sram_base);
 }
 
-static void slab_cortex_m_set_sram_base(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_sram_base(Object *obj,
+                                        const char *value,
+                                        Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid sram-base: '%s'", value);
+        return;
+    }
     s->sram_base = (uint32_t)v;
 }
 
@@ -1599,10 +1663,17 @@ static char *slab_cortex_m_get_sram_size(Object *obj, Error **errp)
     return g_strdup_printf("0x%x", s->sram_size);
 }
 
-static void slab_cortex_m_set_sram_size(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_sram_size(Object *obj,
+                                        const char *value,
+                                        Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid sram-size: '%s'", value);
+        return;
+    }
     if (v == 0 || v > 64 * 1024 * 1024) {
         error_setg(errp, "sram-size must be between 1 and 64MB");
         return;
@@ -1616,10 +1687,17 @@ static char *slab_cortex_m_get_sysclk_hz(Object *obj, Error **errp)
     return g_strdup_printf("%u", s->sysclk_hz);
 }
 
-static void slab_cortex_m_set_sysclk_hz(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_sysclk_hz(Object *obj,
+                                        const char *value,
+                                        Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid sysclk-hz: '%s'", value);
+        return;
+    }
     if (v == 0 || v > 1000000000) {
         error_setg(errp, "sysclk-hz must be between 1 and 1000000000");
         return;
@@ -1633,10 +1711,17 @@ static char *slab_cortex_m_get_ns_flash_base(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", s->ns_flash_base);
 }
 
-static void slab_cortex_m_set_ns_flash_base(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_ns_flash_base(Object *obj,
+                                            const char *value,
+                                            Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid ns-flash-base: '%s'", value);
+        return;
+    }
     s->ns_flash_base = (uint32_t)v;
 }
 
@@ -1646,10 +1731,17 @@ static char *slab_cortex_m_get_ns_flash_size(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", s->ns_flash_size);
 }
 
-static void slab_cortex_m_set_ns_flash_size(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_ns_flash_size(Object *obj,
+                                            const char *value,
+                                            Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid ns-flash-size: '%s'", value);
+        return;
+    }
     if (v > 64 * 1024 * 1024) {
         error_setg(errp, "ns-flash-size must be <= 64MB");
         return;
@@ -1665,10 +1757,17 @@ static char *slab_cortex_m_get_bootrom_base(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", s->bootrom_base);
 }
 
-static void slab_cortex_m_set_bootrom_base(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_bootrom_base(Object *obj,
+                                           const char *value,
+                                           Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid bootrom-base: '%s'", value);
+        return;
+    }
     s->bootrom_base = (uint32_t)v;
 }
 
@@ -1678,10 +1777,17 @@ static char *slab_cortex_m_get_bootrom_size(Object *obj, Error **errp)
     return g_strdup_printf("0x%x", s->bootrom_size);
 }
 
-static void slab_cortex_m_set_bootrom_size(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_bootrom_size(Object *obj,
+                                           const char *value,
+                                           Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid bootrom-size: '%s'", value);
+        return;
+    }
     if (v == 0 || v > 1024 * 1024) {
         error_setg(errp, "bootrom-size must be between 1 and 1MB");
         return;
@@ -1697,10 +1803,17 @@ static char *slab_cortex_m_get_periph_base(Object *obj, Error **errp)
     return g_strdup_printf("0x%08x", s->periph_base);
 }
 
-static void slab_cortex_m_set_periph_base(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_periph_base(Object *obj,
+                                          const char *value,
+                                          Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid periph-base: '%s'", value);
+        return;
+    }
     s->periph_base = (uint32_t)v;
 }
 
@@ -1710,10 +1823,17 @@ static char *slab_cortex_m_get_periph_size(Object *obj, Error **errp)
     return g_strdup_printf("0x%x", s->periph_size);
 }
 
-static void slab_cortex_m_set_periph_size(Object *obj, const char *value, Error **errp)
+static void slab_cortex_m_set_periph_size(Object *obj,
+                                          const char *value,
+                                          Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
-    uint64_t v = strtoull(value, NULL, 0);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid periph-size: '%s'", value);
+        return;
+    }
     if (v == 0 || v > 0xC0000000ULL) {
         error_setg(errp, "periph-size must be between 1 and 3GB");
         return;

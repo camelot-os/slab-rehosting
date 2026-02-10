@@ -622,8 +622,11 @@ static void usbip_handle_submit(SlabUSBIPState *s, const uint8_t *header)
             dwc2_inject_out_data(s, 0, transfer_buf, transfer_buffer_length);
         }
 
-        /* For IN control transfers, firmware will write response to EP0 TX FIFO.
-         * The response is sent when firmware completes the transfer (XFRC). */
+        /*
+         * For IN control transfers, firmware will write response
+         * to EP0 TX FIFO.  The response is sent when firmware
+         * completes the transfer (XFRC).
+         */
         if (direction == 0 && transfer_buffer_length == 0) {
             /* Zero-length OUT (status stage) - respond immediately */
             s->pending_urb[ep].active = false;
@@ -693,8 +696,11 @@ static void slab_usbip_send_ret_submit(SlabUSBIPState *s, int ep)
     uint32_t actual_length;
 
     if (!urb->active && ep != 0) {
-        /* No pending URB for this endpoint -- might be a firmware-initiated
-         * transfer that doesn't correspond to a USBIP request */
+        /*
+         * No pending URB for this endpoint -- might be a
+         * firmware-initiated transfer that doesn't correspond
+         * to a USBIP request.
+         */
         return;
     }
 
@@ -1020,9 +1026,12 @@ static void slab_usbip_write(void *opaque, hwaddr offset, uint64_t value,
         uint32_t old_gintsts = dwc2_reg_read(s, DWC2_GINTSTS);
         dwc2_reg_write(s, DWC2_GINTSTS, old_gintsts & ~(uint32_t)value);
 
-        /* When firmware acknowledges USBRST, fire ENUMDNE automatically.
-         * Per RM0090 section 35.17.4: after the host resets the bus,
-         * the DWC2 core completes speed enumeration and sets ENUMDNE. */
+        /*
+         * When firmware acknowledges USBRST, fire ENUMDNE
+         * automatically.  Per RM0090 section 35.17.4: after the
+         * host resets the bus, the DWC2 core completes speed
+         * enumeration and sets ENUMDNE.
+         */
         if ((value & GINTSTS_USBRST) && (old_gintsts & GINTSTS_USBRST)) {
             dwc2_reg_write(s, DWC2_GINTSTS,
                            dwc2_reg_read(s, DWC2_GINTSTS) | GINTSTS_ENUMDNE);
