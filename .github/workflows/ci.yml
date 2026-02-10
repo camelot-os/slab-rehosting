@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [slab/public]
+  pull_request:
+    branches: [slab/public]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: pip install PyYAML pytest
+
+      - name: Run tests
+        run: PYTHONPATH=slab/python pytest slab/tests/ -v --tb=short --junitxml=results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-py${{ matrix.python-version }}
+          path: results.xml
