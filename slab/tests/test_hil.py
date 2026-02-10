@@ -1,27 +1,32 @@
-#!/usr/bin/env python3
 """
-Hardware-in-the-Loop (HIL) Test for MCUemu
+Unit tests for Hardware-in-the-Loop (HIL) peripherals.
 
-This test demonstrates the HIL capability by running a mock hardware server
-and verifying that the HIL peripheral correctly forwards accesses.
+Tests HILTCPPeripheral, HILOpenOCDPeripheral, HILSerialPeripheral,
+create_hil_peripheral factory, and board_builder HIL integration.
 
-Usage:
-    python3 test_hil.py
-
-Author: Twisted Wires Security Lab
+Author: Mathieu Renard <mathieu.renard@twistedwires.io>
 Copyright (C) 2026 Twisted Wires Security Lab
 SPDX-License-Identifier: Apache-2.0
 """
 
 import asyncio
 import struct
-import sys
-import os
+import pytest
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
-
-from hil_peripheral import HILTCPPeripheral, HILResponse
+from slab_cortex_m.hil_peripheral import (
+    HILTCPPeripheral,
+    HILOpenOCDPeripheral,
+    HILSerialPeripheral,
+    HILPeripheral,
+    HILResponse,
+    HILStats,
+    HILTraceRecord,
+    HILTraceRecorder,
+    HILReplayPeripheral,
+    HILPyOCDSession,
+    HILPyOCDRegion,
+    create_hil_peripheral,
+)
 
 
 # =============================================================================
@@ -29,284 +34,598 @@ from hil_peripheral import HILTCPPeripheral, HILResponse
 # =============================================================================
 
 class MockHardwareServer:
-    """
-    Simulates real hardware for HIL testing.
+    """TCP server that simulates real hardware for HIL tests."""
 
-    This server implements the MCUemu TCP protocol and responds to
-    peripheral accesses as if it were real hardware.
-    """
-
-    def __init__(self, port: int = 5001):
+    def __init__(self, port: int):
         self.port = port
         self.server = None
         self.running = False
-
-        # Simulated peripheral registers (STM32F4 GPIOA)
         self.registers = {
-            0x40020000: 0xA8000000,  # MODER
+            0x40020000: 0xA8000000,  # GPIOA MODER
             0x40020004: 0x00000000,  # OTYPER
-            0x40020008: 0x0C000000,  # OSPEEDR
-            0x4002000C: 0x64000000,  # PUPDR
-            0x40020010: 0x00000000,  # IDR (input)
-            0x40020014: 0x00000000,  # ODR (output)
+            0x40020014: 0x00000000,  # ODR
             0x40020018: 0x00000000,  # BSRR
-            0x4002001C: 0x00000000,  # LCKR
-            0x40020020: 0x00000000,  # AFRL
-            0x40020024: 0x00000000,  # AFRH
         }
 
     async def handle_client(self, reader, writer):
-        """Handle client connection."""
-        addr = writer.get_extra_info('peername')
-        print(f"[MockHW] Client connected: {addr}")
-
         try:
             while self.running:
-                # Read command byte
                 cmd = await reader.read(1)
                 if not cmd:
                     break
 
                 if cmd == b'R':
-                    # Read request: addr(4) + size(4) + secure(1)
                     data = await reader.read(9)
                     if len(data) < 9:
                         break
                     addr_val, size, secure = struct.unpack('<IIB', data)
-
-                    # Return register value or 0 for unknown
                     value = self.registers.get(addr_val, 0)
-                    print(f"[MockHW] Read 0x{addr_val:08X} = 0x{value:08X}")
-
-                    # Send response: value(4) + status(1)
-                    response = struct.pack('<IB', value, 0)
-                    writer.write(response)
+                    writer.write(struct.pack('<IB', value, 0))
                     await writer.drain()
 
                 elif cmd == b'W':
-                    # Write request: addr(4) + size(4) + value(4) + secure(1)
                     data = await reader.read(13)
                     if len(data) < 13:
                         break
                     addr_val, size, value, secure = struct.unpack('<IIIB', data)
-
-                    # Store register value
                     self.registers[addr_val] = value
-                    print(f"[MockHW] Write 0x{addr_val:08X} <- 0x{value:08X}")
-
-                    # Handle BSRR (bit set/reset register)
+                    # BSRR logic
                     if addr_val == 0x40020018:
                         odr = self.registers.get(0x40020014, 0)
-                        set_bits = value & 0xFFFF
-                        reset_bits = (value >> 16) & 0xFFFF
-                        odr = (odr | set_bits) & ~reset_bits
+                        odr = (odr | (value & 0xFFFF)) & ~((value >> 16) & 0xFFFF)
                         self.registers[0x40020014] = odr
-
-                    # Send response: value(4) + status(1)
-                    response = struct.pack('<IB', value, 0)
-                    writer.write(response)
+                    writer.write(struct.pack('<IB', value, 0))
                     await writer.drain()
-
-        except Exception as e:
-            print(f"[MockHW] Error: {e}")
+        except Exception:
+            pass
         finally:
             writer.close()
             await writer.wait_closed()
-            print("[MockHW] Client disconnected")
 
     async def start(self):
-        """Start the mock hardware server."""
         self.running = True
         self.server = await asyncio.start_server(
-            self.handle_client, 'localhost', self.port
-        )
-        print(f"[MockHW] Server started on port {self.port}")
+            self.handle_client, 'localhost', self.port)
 
     async def stop(self):
-        """Stop the mock hardware server."""
         self.running = False
         if self.server:
             self.server.close()
             await self.server.wait_closed()
-        print("[MockHW] Server stopped")
 
 
 # =============================================================================
-# TEST CASES
+# HILPeripheral BASE
 # =============================================================================
 
-async def test_basic_read_write():
-    """Test basic HIL read/write operations."""
-    print("\n=== Test: Basic Read/Write ===")
+class TestHILStats:
 
-    # Create mock hardware server
-    mock_hw = MockHardwareServer(port=5001)
-    await mock_hw.start()
-    await asyncio.sleep(0.1)
+    def test_avg_latency_zero_ops(self):
+        stats = HILStats()
+        assert stats.avg_latency_ms == 0.0
 
-    try:
-        # Create HIL peripheral
-        hil = HILTCPPeripheral(
-            name="GPIOA_HIL",
-            base=0x40020000,
-            size=0x400,
-            port=5001
+    def test_avg_latency(self):
+        stats = HILStats(reads=5, writes=5, total_latency_ms=100.0)
+        assert stats.avg_latency_ms == 10.0
+
+
+class TestHILPeripheralBase:
+
+    def test_contains(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=9999)
+        assert hil.contains(0x40020000)
+        assert hil.contains(0x400203FF)
+        assert not hil.contains(0x40020400)
+        assert not hil.contains(0x4001FFFF)
+
+    def test_check_security(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=9999)
+        assert hil.check_security(True)
+        assert hil.check_security(False)
+
+    def test_set_irq_callback(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=9999, irq=25)
+        calls = []
+        hil.set_irq_callback(lambda irq, level: calls.append((irq, level)))
+        hil.trigger_irq(1)
+        assert calls == [(25, 1)]
+
+    def test_trigger_irq_no_callback(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=9999, irq=25)
+        # Should not raise
+        hil.trigger_irq(1)
+
+    def test_trigger_irq_no_irq(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=9999)
+        assert hil.irq == -1
+        calls = []
+        hil.set_irq_callback(lambda irq, level: calls.append((irq, level)))
+        hil.trigger_irq(1)
+        assert calls == []  # No IRQ assigned
+
+
+# =============================================================================
+# TCP HIL PERIPHERAL
+# =============================================================================
+
+class TestHILTCPPeripheral:
+
+    @pytest.mark.asyncio
+    async def test_basic_read_write(self):
+        mock_hw = MockHardwareServer(port=15001)
+        await mock_hw.start()
+        await asyncio.sleep(0.05)
+
+        try:
+            hil = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=15001)
+            assert await hil.connect()
+
+            value = await hil.read(0x40020000, 4)
+            assert value == 0xA8000000
+
+            await hil.write(0x40020014, 4, 0x00FF)
+            value = await hil.read(0x40020014, 4)
+            assert value == 0x00FF
+
+            assert hil.stats.reads == 2
+            assert hil.stats.writes == 1
+
+            await hil.disconnect()
+        finally:
+            await mock_hw.stop()
+
+    @pytest.mark.asyncio
+    async def test_bsrr_operation(self):
+        mock_hw = MockHardwareServer(port=15002)
+        await mock_hw.start()
+        await asyncio.sleep(0.05)
+
+        try:
+            hil = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=15002)
+            assert await hil.connect()
+
+            await hil.write(0x40020018, 4, 0x000F)   # Set bits 0-3
+            value = await hil.read(0x40020014, 4)
+            assert value == 0x000F
+
+            await hil.write(0x40020018, 4, 0x00030030)  # Reset 0-1, set 4-5
+            value = await hil.read(0x40020014, 4)
+            assert value == 0x003C
+
+            await hil.disconnect()
+        finally:
+            await mock_hw.stop()
+
+    @pytest.mark.asyncio
+    async def test_connect_failure(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400,
+                               port=15099, timeout=0.1)
+        result = await hil.connect()
+        assert not result
+        assert not hil.connected
+
+    @pytest.mark.asyncio
+    async def test_read_not_connected(self):
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=15099)
+        hil.auto_reconnect = False
+        value = await hil.read(0x40020000, 4)
+        assert value == 0xDEADBEEF
+
+
+# =============================================================================
+# FACTORY
+# =============================================================================
+
+class TestCreateHILPeripheral:
+
+    def test_create_tcp(self):
+        hil = create_hil_peripheral({
+            'name': 'GPIOA_HIL',
+            'base': '0x40020000',
+            'size': '0x400',
+            'backend': 'tcp',
+            'host': 'localhost',
+            'port': 5001,
+        })
+        assert isinstance(hil, HILTCPPeripheral)
+        assert hil.name == 'GPIOA_HIL'
+        assert hil.base == 0x40020000
+        assert hil.size == 0x400
+
+    def test_create_openocd(self):
+        hil = create_hil_peripheral({
+            'name': 'GPIOB_HIL',
+            'base': '0x40020400',
+            'size': '0x400',
+            'backend': 'openocd',
+            'port': 6666,
+        })
+        assert isinstance(hil, HILOpenOCDPeripheral)
+        assert hil.port == 6666
+
+    def test_create_serial(self):
+        hil = create_hil_peripheral({
+            'name': 'GPIOC_HIL',
+            'base': '0x40020800',
+            'size': '0x400',
+            'backend': 'serial',
+            'serial_port': '/dev/ttyUSB0',
+            'baudrate': 115200,
+        })
+        assert isinstance(hil, HILSerialPeripheral)
+        assert hil.serial_port == '/dev/ttyUSB0'
+        assert hil.baudrate == 115200
+
+    def test_create_default_tcp(self):
+        hil = create_hil_peripheral({
+            'name': 'TEST',
+            'base': '0x40000000',
+            'size': '0x1000',
+        })
+        assert isinstance(hil, HILTCPPeripheral)
+
+    def test_create_with_irq(self):
+        hil = create_hil_peripheral({
+            'name': 'TEST',
+            'base': '0x40000000',
+            'size': '0x1000',
+            'irq': 25,
+        })
+        assert hil.irq == 25
+
+
+# =============================================================================
+# BOARD BUILDER INTEGRATION
+# =============================================================================
+
+class TestBoardHIL:
+
+    def test_board_hil_peripherals_list(self):
+        from slab_cortex_m.board import BoardConfig
+        from slab_cortex_m.board_builder import Board
+        from slab_cortex_m.peripheral_adapter import PeripheralSetAdapter
+
+        class FakePSet:
+            peripherals = []
+
+        config = BoardConfig(name="test", mcu="STM32F405")
+        adapter = PeripheralSetAdapter(FakePSet())
+        board = Board(config, adapter)
+        assert board.hil_peripherals == []
+
+    def test_board_find_peripheral_hil_override(self):
+        from slab_cortex_m.board import BoardConfig
+        from slab_cortex_m.board_builder import Board
+        from slab_cortex_m.peripheral_adapter import PeripheralSetAdapter
+
+        class FakePSet:
+            peripherals = []
+
+        config = BoardConfig(name="test", mcu="STM32F405")
+        adapter = PeripheralSetAdapter(FakePSet())
+        board = Board(config, adapter)
+
+        # Add HIL peripheral
+        hil = HILTCPPeripheral("GPIOA_HIL", 0x40020000, 0x400, port=9999)
+        board.hil_peripherals.append(hil)
+
+        # find_peripheral should return HIL first
+        found = board.find_peripheral(0x40020000)
+        assert found is hil
+
+        # contains should include HIL range
+        assert board.contains(0x40020000)
+
+    def test_board_contains_hil(self):
+        from slab_cortex_m.board import BoardConfig
+        from slab_cortex_m.board_builder import Board
+        from slab_cortex_m.peripheral_adapter import PeripheralSetAdapter
+
+        class FakePSet:
+            peripherals = []
+
+        config = BoardConfig(name="test", mcu="STM32F405")
+        adapter = PeripheralSetAdapter(FakePSet())
+        board = Board(config, adapter)
+
+        assert not board.contains(0x40020000)
+
+        hil = HILTCPPeripheral("TEST", 0x40020000, 0x400, port=9999)
+        board.hil_peripherals.append(hil)
+
+        assert board.contains(0x40020000)
+        assert board.contains(0x400203FF)
+        assert not board.contains(0x40020400)
+
+
+# =============================================================================
+# HIL TRACE RECORD
+# =============================================================================
+
+class TestHILTraceRecord:
+
+    def test_to_dict(self):
+        rec = HILTraceRecord(
+            sequence=1, timestamp=0.001, is_write=False,
+            address=0x40020000, size=4, value=0xA8000000,
+            latency_ms=1.5, success=True, peripheral_name="GPIOA",
         )
+        d = rec.to_dict()
+        assert d['seq'] == 1
+        assert d['rw'] == 'R'
+        assert d['addr'] == '0x40020000'
+        assert d['value'] == '0xA8000000'
+        assert d['ok'] is True
 
-        # Connect
-        assert await hil.connect(), "Failed to connect to mock hardware"
+    def test_from_dict(self):
+        d = {
+            'seq': 2, 'ts': 0.5, 'rw': 'W',
+            'addr': '0x40020014', 'size': 4,
+            'value': '0x000000FF', 'latency_ms': 2.0,
+            'ok': True, 'periph': 'GPIOA',
+        }
+        rec = HILTraceRecord.from_dict(d)
+        assert rec.sequence == 2
+        assert rec.is_write is True
+        assert rec.address == 0x40020014
+        assert rec.value == 0xFF
 
-        # Test read
-        value = await hil.read(0x40020000, 4)  # MODER
-        print(f"Read MODER = 0x{value:08X}")
-        assert value == 0xA8000000, f"Expected 0xA8000000, got 0x{value:08X}"
-
-        # Test write
-        await hil.write(0x40020014, 4, 0x00FF)  # ODR
-        print("Wrote 0x00FF to ODR")
-
-        # Read back
-        value = await hil.read(0x40020014, 4)
-        print(f"Read back ODR = 0x{value:08X}")
-        assert value == 0x00FF, f"Expected 0x00FF, got 0x{value:08X}"
-
-        # Disconnect
-        await hil.disconnect()
-        print("PASS: Basic read/write test")
-        return True
-
-    except AssertionError as e:
-        print(f"FAIL: {e}")
-        return False
-    finally:
-        await mock_hw.stop()
-
-
-async def test_bsrr_operation():
-    """Test GPIO BSRR (bit set/reset) operation."""
-    print("\n=== Test: BSRR Operation ===")
-
-    mock_hw = MockHardwareServer(port=5002)
-    await mock_hw.start()
-    await asyncio.sleep(0.1)
-
-    try:
-        hil = HILTCPPeripheral(
-            name="GPIOA_HIL",
-            base=0x40020000,
-            size=0x400,
-            port=5002
+    def test_roundtrip(self):
+        rec = HILTraceRecord(
+            sequence=3, timestamp=1.0, is_write=True,
+            address=0x50060000, size=4, value=0xDEADBEEF,
         )
-
-        assert await hil.connect()
-
-        # Set bits 0-3
-        await hil.write(0x40020018, 4, 0x000F)  # BSRR: set bits 0-3
-        value = await hil.read(0x40020014, 4)   # Read ODR
-        print(f"After BSRR set 0-3: ODR = 0x{value:08X}")
-        assert value == 0x000F, f"Expected 0x000F, got 0x{value:08X}"
-
-        # Reset bits 0-1, set bits 4-5
-        await hil.write(0x40020018, 4, 0x00030030)  # BSRR: reset 0-1, set 4-5
-        value = await hil.read(0x40020014, 4)
-        print(f"After BSRR reset 0-1, set 4-5: ODR = 0x{value:08X}")
-        assert value == 0x003C, f"Expected 0x003C, got 0x{value:08X}"
-
-        await hil.disconnect()
-        print("PASS: BSRR operation test")
-        return True
-
-    except AssertionError as e:
-        print(f"FAIL: {e}")
-        return False
-    finally:
-        await mock_hw.stop()
-
-
-async def test_multiple_peripherals():
-    """Test multiple HIL peripherals to same server."""
-    print("\n=== Test: Multiple Peripherals ===")
-
-    mock_hw = MockHardwareServer(port=5003)
-    # Add GPIOB registers
-    mock_hw.registers.update({
-        0x40020400: 0x00000280,  # GPIOB MODER
-        0x40020414: 0x00000000,  # GPIOB ODR
-    })
-    await mock_hw.start()
-    await asyncio.sleep(0.1)
-
-    try:
-        # Create two HIL peripherals for GPIOA and GPIOB
-        gpioa = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=5003)
-        gpiob = HILTCPPeripheral("GPIOB", 0x40020400, 0x400, port=5003)
-
-        assert await gpioa.connect()
-        assert await gpiob.connect()
-
-        # Read from both
-        moder_a = await gpioa.read(0x40020000, 4)
-        moder_b = await gpiob.read(0x40020400, 4)
-
-        print(f"GPIOA MODER = 0x{moder_a:08X}")
-        print(f"GPIOB MODER = 0x{moder_b:08X}")
-
-        assert moder_a == 0xA8000000
-        assert moder_b == 0x00000280
-
-        # Write to both
-        await gpioa.write(0x40020014, 4, 0xAA)
-        await gpiob.write(0x40020414, 4, 0x55)
-
-        # Read back
-        odr_a = await gpioa.read(0x40020014, 4)
-        odr_b = await gpiob.read(0x40020414, 4)
-
-        print(f"GPIOA ODR = 0x{odr_a:08X}")
-        print(f"GPIOB ODR = 0x{odr_b:08X}")
-
-        assert odr_a == 0xAA
-        assert odr_b == 0x55
-
-        await gpioa.disconnect()
-        await gpiob.disconnect()
-        print("PASS: Multiple peripherals test")
-        return True
-
-    except AssertionError as e:
-        print(f"FAIL: {e}")
-        return False
-    finally:
-        await mock_hw.stop()
+        d = rec.to_dict()
+        rec2 = HILTraceRecord.from_dict(d)
+        assert rec2.address == rec.address
+        assert rec2.value == rec.value
+        assert rec2.is_write == rec.is_write
 
 
 # =============================================================================
-# MAIN
+# HIL TRACE RECORDER
 # =============================================================================
 
-async def main():
-    """Run all HIL tests."""
-    print("=" * 60)
-    print("MCUemu Hardware-in-the-Loop (HIL) Tests")
-    print("=" * 60)
+class TestHILTraceRecorder:
 
-    results = []
-    results.append(await test_basic_read_write())
-    results.append(await test_bsrr_operation())
-    results.append(await test_multiple_peripherals())
+    @pytest.mark.asyncio
+    async def test_record_read_write(self):
+        mock_hw = MockHardwareServer(port=15003)
+        await mock_hw.start()
+        await asyncio.sleep(0.05)
 
-    print("\n" + "=" * 60)
-    passed = sum(results)
-    total = len(results)
-    print(f"Results: {passed}/{total} tests passed")
+        try:
+            hil = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=15003)
+            recorder = HILTraceRecorder(hil)
 
-    if passed == total:
-        print("All HIL tests PASSED!")
-        return 0
-    else:
-        print("Some tests FAILED!")
-        return 1
+            assert await hil.connect()
+
+            # Read through recorder
+            value = await recorder.read(0x40020000, 4)
+            assert value == 0xA8000000
+
+            # Write through recorder
+            await recorder.write(0x40020014, 4, 0xAA)
+
+            # Read back
+            await recorder.read(0x40020014, 4)
+
+            assert len(recorder.records) == 3
+            assert recorder.records[0].is_write is False
+            assert recorder.records[0].address == 0x40020000
+            assert recorder.records[1].is_write is True
+            assert recorder.records[1].value == 0xAA
+            assert recorder.records[2].is_write is False
+
+            await hil.disconnect()
+        finally:
+            await mock_hw.stop()
+
+    @pytest.mark.asyncio
+    async def test_save_load(self, tmp_path):
+        mock_hw = MockHardwareServer(port=15004)
+        await mock_hw.start()
+        await asyncio.sleep(0.05)
+
+        try:
+            hil = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=15004)
+            recorder = HILTraceRecorder(hil)
+            assert await hil.connect()
+
+            await recorder.read(0x40020000, 4)
+            await recorder.write(0x40020014, 4, 0x55)
+
+            trace_file = str(tmp_path / "trace.jsonl")
+            recorder.save(trace_file)
+
+            loaded = HILTraceRecorder.load(trace_file)
+            assert len(loaded) == 2
+            assert loaded[0].address == 0x40020000
+            assert loaded[1].value == 0x55
+
+            await hil.disconnect()
+        finally:
+            await mock_hw.stop()
+
+    def test_recorder_properties(self):
+        hil = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=9999)
+        recorder = HILTraceRecorder(hil)
+        assert recorder.name == "GPIOA"
+        assert recorder.base == 0x40020000
+        assert recorder.size == 0x400
+        assert recorder.contains(0x40020000)
+        assert not recorder.contains(0x40030000)
+
+    def test_reset(self):
+        hil = HILTCPPeripheral("GPIOA", 0x40020000, 0x400, port=9999)
+        recorder = HILTraceRecorder(hil)
+        recorder.records.append(HILTraceRecord(
+            1, 0.0, False, 0x40020000, 4, 0, peripheral_name="GPIOA"))
+        assert len(recorder.records) == 1
+        recorder.reset()
+        assert len(recorder.records) == 0
 
 
-if __name__ == '__main__':
-    sys.exit(asyncio.run(main()))
+# =============================================================================
+# HIL REPLAY PERIPHERAL
+# =============================================================================
+
+class TestHILReplayPeripheral:
+
+    @pytest.mark.asyncio
+    async def test_replay_read(self):
+        records = [
+            HILTraceRecord(1, 0.0, False, 0x40020000, 4, 0xA8000000),
+            HILTraceRecord(2, 0.1, True, 0x40020014, 4, 0x00FF),
+            HILTraceRecord(3, 0.2, False, 0x40020014, 4, 0x00FF),
+        ]
+        replay = HILReplayPeripheral("GPIOA", 0x40020000, 0x400, records)
+        assert await replay.connect()
+
+        # Sequential read replay
+        value = await replay.read(0x40020000, 4)
+        assert value == 0xA8000000
+
+        value = await replay.read(0x40020014, 4)
+        assert value == 0x00FF
+
+    @pytest.mark.asyncio
+    async def test_replay_fallback_to_value_map(self):
+        records = [
+            HILTraceRecord(1, 0.0, False, 0x40020000, 4, 0x1234),
+        ]
+        replay = HILReplayPeripheral("TEST", 0x40020000, 0x400, records)
+        await replay.connect()
+
+        # First read: sequential match
+        await replay.read(0x40020000, 4)
+        # Second read: no more sequential records, falls back to value_map
+        value = await replay.read(0x40020000, 4)
+        assert value == 0x1234
+
+    @pytest.mark.asyncio
+    async def test_replay_write_updates_map(self):
+        replay = HILReplayPeripheral("TEST", 0x40020000, 0x400, [])
+        await replay.connect()
+
+        await replay.write(0x40020014, 4, 0xBEEF)
+        value = await replay.read(0x40020014, 4)
+        assert value == 0xBEEF
+
+    @pytest.mark.asyncio
+    async def test_replay_rewind(self):
+        records = [
+            HILTraceRecord(1, 0.0, False, 0x40020000, 4, 0xAAAA),
+        ]
+        replay = HILReplayPeripheral("TEST", 0x40020000, 0x400, records)
+        await replay.connect()
+
+        value = await replay.read(0x40020000, 4)
+        assert value == 0xAAAA
+
+        replay.rewind()
+        value = await replay.read(0x40020000, 4)
+        assert value == 0xAAAA
+
+    @pytest.mark.asyncio
+    async def test_from_trace_file(self, tmp_path):
+        import json
+        trace_file = str(tmp_path / "test.jsonl")
+        records = [
+            {'seq': 1, 'ts': 0.0, 'rw': 'R', 'addr': '0x50060000',
+             'size': 4, 'value': '0x00000001', 'latency_ms': 1.0,
+             'ok': True, 'periph': 'CRYP'},
+        ]
+        with open(trace_file, 'w') as f:
+            for r in records:
+                f.write(json.dumps(r) + '\n')
+
+        replay = HILReplayPeripheral.from_trace(trace_file)
+        assert replay.name == "CRYP"
+        assert replay.contains(0x50060000)
+        await replay.connect()
+        value = await replay.read(0x50060000, 4)
+        assert value == 1
+
+    def test_create_replay_via_factory(self, tmp_path):
+        import json
+        trace_file = str(tmp_path / "factory.jsonl")
+        with open(trace_file, 'w') as f:
+            f.write(json.dumps({
+                'seq': 1, 'ts': 0.0, 'rw': 'R', 'addr': '0x40020000',
+                'size': 4, 'value': '0x00000042', 'ok': True, 'periph': 'GPIO',
+            }) + '\n')
+
+        hil = create_hil_peripheral({
+            'name': 'GPIO_REPLAY',
+            'base': '0x40020000',
+            'size': '0x400',
+            'backend': 'replay',
+            'trace_file': trace_file,
+        })
+        assert isinstance(hil, HILReplayPeripheral)
+
+
+# =============================================================================
+# MULTI-REGION SESSION SHARING
+# =============================================================================
+
+class TestHILPyOCDSession:
+
+    def test_create_regions(self):
+        session = HILPyOCDSession(target_type="stm32f439xi")
+        cryp = session.create_region("CRYP", 0x50060000, 0x400)
+        hash_ = session.create_region("HASH", 0x50060400, 0x400)
+
+        assert isinstance(cryp, HILPyOCDRegion)
+        assert isinstance(hash_, HILPyOCDRegion)
+        assert len(session.regions) == 2
+        assert cryp.shared_session is session
+        assert hash_.shared_session is session
+
+    def test_region_contains(self):
+        session = HILPyOCDSession(target_type="stm32f439xi")
+        cryp = session.create_region("CRYP", 0x50060000, 0x400)
+
+        assert cryp.contains(0x50060000)
+        assert cryp.contains(0x500603FF)
+        assert not cryp.contains(0x50060400)
+
+    def test_region_properties(self):
+        session = HILPyOCDSession(target_type="stm32f439xi")
+        cryp = session.create_region("CRYP", 0x50060000, 0x400, irq=79)
+
+        assert cryp.name == "CRYP"
+        assert cryp.base == 0x50060000
+        assert cryp.size == 0x400
+        assert cryp.irq == 79
+
+    def test_create_shared_via_factory(self):
+        from slab_cortex_m.hil_peripheral import _pyocd_sessions
+        # Clear session registry
+        _pyocd_sessions.clear()
+
+        hil1 = create_hil_peripheral({
+            'name': 'CRYP_HIL',
+            'base': '0x50060000',
+            'size': '0x400',
+            'backend': 'pyocd',
+            'target_type': 'stm32f439xi',
+            'shared_session': True,
+        })
+        hil2 = create_hil_peripheral({
+            'name': 'HASH_HIL',
+            'base': '0x50060400',
+            'size': '0x400',
+            'backend': 'pyocd',
+            'target_type': 'stm32f439xi',
+            'shared_session': True,
+        })
+
+        assert isinstance(hil1, HILPyOCDRegion)
+        assert isinstance(hil2, HILPyOCDRegion)
+        # Both share the same session
+        assert hil1.shared_session is hil2.shared_session
+        assert len(hil1.shared_session.regions) == 2
+
+        _pyocd_sessions.clear()
