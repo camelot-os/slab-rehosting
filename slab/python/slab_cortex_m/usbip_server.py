@@ -700,7 +700,8 @@ class USBIPServer:
     async def start(self):
         """Start the USBIP server."""
         self.server = await asyncio.start_server(
-            self.handle_client, '0.0.0.0', self.port
+            self.handle_client, '0.0.0.0', self.port,
+            reuse_address=True
         )
         self.log.info(f"USBIP server started on port {self.port}")
         self.log.info(f"Device: {self.device_info.busid} (VID:PID {self.device_info.idVendor:04X}:{self.device_info.idProduct:04X})")
