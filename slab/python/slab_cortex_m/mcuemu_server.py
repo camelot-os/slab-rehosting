@@ -1288,6 +1288,42 @@ def _find_usb_in_board(board):
 async def main_async(args):
     usbip_port = getattr(args, 'usbip_port', 0)
 
+    # SVD auto-stub mode
+    if getattr(args, '_svd_mode', False):
+        from slab_cortex_m.svd_peripheral import SVDStubPeripheralSet
+        from slab_cortex_m.peripheral_adapter import PeripheralSetAdapter
+        from slab_cortex_m.base_server import BasePeripheralServer as _BS
+
+        pset = SVDStubPeripheralSet.from_svd(args.svd)
+        adapter = PeripheralSetAdapter(pset, family='stm32')
+
+        class SVDServer(_BS):
+            def __init__(self, port, adapter):
+                super().__init__(port)
+                self._adapter = adapter
+                self._adapter.irq_callback = self.send_irq
+            def create_peripherals(self):
+                pass
+            def find_peripheral(self, addr):
+                if self._adapter.contains(addr):
+                    return self._adapter
+                return None
+
+        server = SVDServer(args.port, adapter)
+        server.running = True
+        tcp_server = await asyncio.start_server(
+            server.handle_client, '127.0.0.1', args.port, reuse_address=True)
+
+        svd_info = pset.get_memory_info()
+        print(f"\n[SVD] {pset.name} ({svd_info['cpu_type']})")
+        print(f"[Listening] tcp://127.0.0.1:{args.port}")
+        print(f"[Peripherals] {len(pset.peripherals)} (auto-stub from SVD)")
+        print(f"[Memory] flash=0x{svd_info['flash_base']:08X} "
+              f"sram=0x{svd_info['sram_base']:08X}")
+
+        await tcp_server.serve_forever()
+        return
+
     if hasattr(args, 'board') and args.board:
         # Board mode: use rich peripheral sets via board builder
         from slab_cortex_m.board import load_board_config
@@ -1358,9 +1394,15 @@ def main():
                        help='Peripheral config file (YAML/JSON, legacy mode)')
     parser.add_argument('--board', '-b', type=str,
                        help='Board config file (YAML) for rich peripheral support')
+    parser.add_argument('--svd', type=str,
+                       help='SVD file for auto-stub peripheral mode (no hand-coded peripherals)')
     parser.add_argument('--verbose', '-v', action='store_true',
                        help='Enable debug logging')
     args = parser.parse_args()
+
+    # --svd is shorthand for --board with SVD: prefix
+    if hasattr(args, 'svd') and args.svd and not args.board:
+        args._svd_mode = True
 
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
