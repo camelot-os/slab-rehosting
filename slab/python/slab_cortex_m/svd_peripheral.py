@@ -18,7 +18,6 @@ SPDX-License-Identifier: Apache-2.0
 
 import logging
 from typing import Dict, List, Optional, Tuple, Callable, Any
-from pathlib import Path
 
 from slab_cortex_m.svd_parser import SVDParser, SVDDevice, SVDPeripheral, SVDRegister
 

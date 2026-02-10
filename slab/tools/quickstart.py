@@ -33,7 +33,6 @@ import logging
 import subprocess
 import sys
 import os
-import signal
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,7 +74,8 @@ def build_qemu_args(svd_info, firmware_path, port, qemu_path, extra_args=None):
 
 
 async def run_server(svd_path, port, patches=None, firmware_path=None,
-                     qemu_path=None, qemu_extra=None, verbose=False):
+                     qemu_path=None, qemu_extra=None, memory_overrides=None,
+                     verbose=False):
     """Run the SLAB peripheral server with SVD auto-stub peripherals."""
     from slab_cortex_m.svd_peripheral import SVDStubPeripheralSet
     from slab_cortex_m.peripheral_adapter import PeripheralSetAdapter
@@ -85,6 +85,10 @@ async def run_server(svd_path, port, patches=None, firmware_path=None,
     # Create SVD stub peripheral set
     pset = SVDStubPeripheralSet.from_svd(svd_path)
     svd_info = pset.get_memory_info()
+
+    # Apply memory overrides from CLI flags
+    if memory_overrides:
+        svd_info.update(memory_overrides)
 
     print(f"\n{'='*60}")
     print(f"  SLAB Quickstart")
@@ -221,6 +225,13 @@ Examples:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
 
+    # Collect memory overrides
+    overrides = {}
+    if args.flash_base is not None:
+        overrides['flash_base'] = args.flash_base
+    if args.sram_base is not None:
+        overrides['sram_base'] = args.sram_base
+
     try:
         asyncio.run(run_server(
             svd_path=args.svd,
@@ -228,6 +239,7 @@ Examples:
             patches=patches,
             firmware_path=args.firmware,
             qemu_path=args.qemu,
+            memory_overrides=overrides,
             verbose=args.verbose,
         ))
     except KeyboardInterrupt:
