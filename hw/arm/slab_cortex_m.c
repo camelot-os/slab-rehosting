@@ -69,6 +69,7 @@
 #include <errno.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <poll.h>
 
 /* ========================================================================= */
 /*                      SHARED MEMORY DEFINITIONS                            */
@@ -179,6 +180,13 @@ typedef enum {
     PROXY_MODE_SHM,
 } ProxyMode;
 
+/* TCP receive state machine states */
+typedef enum {
+    RECV_TAG,     /* Waiting for first byte ('I' = IRQ, else response) */
+    RECV_IRQ,     /* Reading 5 remaining IRQ bytes [irq_le32 + level] */
+    RECV_DATA,    /* Reading 4 remaining response bytes */
+} ProxyRecvState;
+
 struct SlabPeriphProxyState {
     /*< private >*/
     SysBusDevice parent_obj;
@@ -218,9 +226,13 @@ struct SlabPeriphProxyState {
     qemu_irq irqs[MAX_IRQS];
     uint32_t num_irqs;
 
-    /* Receive buffer for async IRQ commands */
+    /* TCP receive state machine */
     uint8_t recv_buf[PROXY_RECV_BUF_SIZE];
     int recv_len;
+    ProxyRecvState proto_state;
+    int recv_needed;        /* Bytes remaining for current message */
+    bool response_ready;    /* Transaction response assembled */
+    uint32_t response_value;
 
     /* TrustZone: current transaction security state */
     bool current_secure;
@@ -228,7 +240,12 @@ struct SlabPeriphProxyState {
 
 /* Forward declarations */
 static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s);
-static void slab_proxy_check_incoming(SlabPeriphProxyState *s);
+static void slab_proxy_disconnect(SlabPeriphProxyState *s);
+static bool slab_proxy_tcp_feed(SlabPeriphProxyState *s,
+                                const uint8_t *data, int len);
+static void slab_proxy_fd_read(void *opaque);
+static bool slab_proxy_flush_send(SlabPeriphProxyState *s,
+                                  const uint8_t *data, int len);
 static bool slab_proxy_init_shm(SlabPeriphProxyState *s);
 static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s);
 
@@ -526,16 +543,18 @@ static uint64_t slab_proxy_shm_transaction(SlabPeriphProxyState *s,
 }
 
 /*
- * TCP transaction
+ * TCP transaction (non-blocking state machine).
+ *
+ * Disables the fd handler during the transaction to avoid races between
+ * the main-loop poll and the recv loop here, then re-enables it after.
+ * Interleaved IRQ packets are handled inline by the state machine.
  */
 static uint64_t slab_proxy_tcp_transaction(SlabPeriphProxyState *s, bool is_write,
                                             uint32_t addr, uint32_t size,
                                             uint64_t write_val)
 {
     uint8_t req[20];
-    uint8_t resp[8];
     int req_len;
-    ssize_t n;
     uint32_t value = 0;
 
     /* Try to connect if not connected */
@@ -591,60 +610,44 @@ static uint64_t slab_proxy_tcp_transaction(SlabPeriphProxyState *s, bool is_writ
         req_len += 4;
     }
 
-    /* Send request */
-    n = send(s->client_fd, req, req_len, MSG_NOSIGNAL);
-    if (n != req_len) {
-        close(s->client_fd);
-        s->client_fd = -1;
-        s->tcp_connected = false;
+    /* 1. Disable fd handler to avoid racing with main-loop POLLIN */
+    qemu_set_fd_handler(s->client_fd, NULL, NULL, NULL);
+
+    /* 2. Send request (non-blocking with backpressure retry) */
+    if (!slab_proxy_flush_send(s, req, req_len)) {
+        slab_proxy_disconnect(s);
         return 0;
     }
 
-    /* Receive response (blocking).
-     * The Python server may send IRQ packets (6 bytes, starting with 'I')
-     * interleaved with the transaction response (5 bytes). This can happen
-     * when trigger_irq() is called during a register read/write handler.
-     * Handle IRQ packets inline until we get the actual response. */
-    while (1) {
-        n = recv(s->client_fd, resp, 1, MSG_WAITALL);
-        if (n != 1) {
-            close(s->client_fd);
-            s->client_fd = -1;
-            s->tcp_connected = false;
-            return 0;
-        }
+    /* 3. Poll + recv state machine until response is ready */
+    s->response_ready = false;
+    {
+        struct pollfd pfd;
+        pfd.fd = s->client_fd;
+        pfd.events = POLLIN;
 
-        if (resp[0] == 'I') {
-            /* Inline IRQ packet: read remaining 5 bytes */
-            uint8_t irq_buf[5];
-            n = recv(s->client_fd, irq_buf, 5, MSG_WAITALL);
-            if (n != 5) {
-                close(s->client_fd);
-                s->client_fd = -1;
-                s->tcp_connected = false;
+        while (!s->response_ready) {
+            int ret = poll(&pfd, 1, 10000 /* 10s timeout */);
+            if (ret <= 0) {
+                warn_report("Slab Proxy: TCP transaction timeout/error");
+                slab_proxy_disconnect(s);
                 return 0;
             }
-            uint32_t irq_num = irq_buf[0] | (irq_buf[1] << 8) |
-                               (irq_buf[2] << 16) | (irq_buf[3] << 24);
-            int level = irq_buf[4];
-            if (irq_num < s->num_irqs) {
-                qemu_set_irq(s->irqs[irq_num], level);
-            }
-            continue;  /* Read next byte - might be another IRQ or the response */
-        }
 
-        /* First byte of transaction response, read remaining 4 bytes */
-        n = recv(s->client_fd, resp + 1, 4, MSG_WAITALL);
-        if (n != 4) {
-            close(s->client_fd);
-            s->client_fd = -1;
-            s->tcp_connected = false;
-            return 0;
+            uint8_t buf[64];
+            ssize_t n = recv(s->client_fd, buf, sizeof(buf), MSG_DONTWAIT);
+            if (n <= 0) {
+                slab_proxy_disconnect(s);
+                return 0;
+            }
+            slab_proxy_tcp_feed(s, buf, (int)n);
         }
-        break;
     }
 
-    value = resp[0] | (resp[1] << 8) | (resp[2] << 16) | (resp[3] << 24);
+    value = s->response_value;
+
+    /* 4. Re-enable fd handler for async IRQ delivery */
+    qemu_set_fd_handler(s->client_fd, slab_proxy_fd_read, NULL, s);
 
     /* Cache the value for disconnected fallback */
     if (!is_write) {
@@ -678,7 +681,6 @@ static uint64_t slab_proxy_read(void *opaque, hwaddr offset, unsigned size)
     uint32_t addr = s->base_addr + offset;
 
     s->current_secure = s->trustzone_enabled ? false : true;
-    slab_proxy_check_incoming(s);
 
     return slab_proxy_transaction(s, false, addr, size, 0);
 }
@@ -698,7 +700,6 @@ static void slab_proxy_write(void *opaque, hwaddr offset, uint64_t value,
     g_hash_table_insert(s->reg_cache, GUINT_TO_POINTER(addr),
                        GUINT_TO_POINTER((uint32_t)value));
 
-    slab_proxy_check_incoming(s);
     slab_proxy_transaction(s, true, addr, size, value);
 }
 
@@ -836,49 +837,164 @@ static bool slab_proxy_init_shm(SlabPeriphProxyState *s)
 }
 
 /*
- * Check for incoming IRQ injection commands (TCP)
+ * Disconnect from TCP server and reset state machine.
  */
-static void slab_proxy_check_incoming(SlabPeriphProxyState *s)
+static void slab_proxy_disconnect(SlabPeriphProxyState *s)
 {
-    uint8_t buf[8];
-    ssize_t n;
-
-    if (s->mode == PROXY_MODE_SHM) {
-        /* For SHM, IRQs are checked during transactions */
-        return;
+    if (s->client_fd >= 0) {
+        qemu_set_fd_handler(s->client_fd, NULL, NULL, NULL);
+        close(s->client_fd);
+        s->client_fd = -1;
     }
+    s->tcp_connected = false;
+    s->proto_state = RECV_TAG;
+    s->recv_len = 0;
+    s->recv_needed = 0;
+    s->response_ready = false;
+}
+
+/*
+ * Process received bytes through the TCP receive state machine.
+ *
+ * Handles partial message reassembly: TCP may deliver IRQ packets (6 bytes)
+ * or transaction responses (5 bytes) split across multiple recv() calls.
+ * The state machine accumulates bytes in recv_buf until a complete message
+ * is assembled, then dispatches it (IRQ delivery or response_ready flag).
+ *
+ * Returns true if a transaction response has been assembled.
+ */
+static bool slab_proxy_tcp_feed(SlabPeriphProxyState *s,
+                                const uint8_t *data, int len)
+{
+    int pos = 0;
+
+    while (pos < len) {
+        switch (s->proto_state) {
+        case RECV_TAG: {
+            uint8_t tag = data[pos++];
+            if (tag == 'I') {
+                s->proto_state = RECV_IRQ;
+                s->recv_len = 0;
+                s->recv_needed = 5;
+            } else {
+                s->recv_buf[0] = tag;
+                s->recv_len = 1;
+                s->recv_needed = 4;
+                s->proto_state = RECV_DATA;
+            }
+            break;
+        }
+        case RECV_IRQ: {
+            int want = s->recv_needed;
+            int avail = len - pos;
+            int copy = (avail < want) ? avail : want;
+            memcpy(s->recv_buf + s->recv_len, data + pos, copy);
+            s->recv_len += copy;
+            s->recv_needed -= copy;
+            pos += copy;
+            if (s->recv_needed == 0) {
+                /* Complete IRQ packet: 4 bytes irq_num LE32 + 1 byte level */
+                uint32_t irq_num = s->recv_buf[0] |
+                    ((uint32_t)s->recv_buf[1] << 8) |
+                    ((uint32_t)s->recv_buf[2] << 16) |
+                    ((uint32_t)s->recv_buf[3] << 24);
+                int level = s->recv_buf[4];
+                if (irq_num < s->num_irqs) {
+                    qemu_set_irq(s->irqs[irq_num], level);
+                }
+                s->proto_state = RECV_TAG;
+                s->recv_len = 0;
+            }
+            break;
+        }
+        case RECV_DATA: {
+            int want = s->recv_needed;
+            int avail = len - pos;
+            int copy = (avail < want) ? avail : want;
+            memcpy(s->recv_buf + s->recv_len, data + pos, copy);
+            s->recv_len += copy;
+            s->recv_needed -= copy;
+            pos += copy;
+            if (s->recv_needed == 0) {
+                /* Complete response: 5 bytes = [data LE32] + [status] */
+                s->response_value = s->recv_buf[0] |
+                    ((uint32_t)s->recv_buf[1] << 8) |
+                    ((uint32_t)s->recv_buf[2] << 16) |
+                    ((uint32_t)s->recv_buf[3] << 24);
+                s->response_ready = true;
+                s->proto_state = RECV_TAG;
+                s->recv_len = 0;
+                return true;
+            }
+            break;
+        }
+        }
+    }
+    return false;
+}
+
+/*
+ * Non-blocking send with backpressure retry.
+ * Returns true on success, false on error.
+ */
+static bool slab_proxy_flush_send(SlabPeriphProxyState *s,
+                                  const uint8_t *data, int len)
+{
+    int sent = 0;
+    while (sent < len) {
+        ssize_t n = send(s->client_fd, data + sent, len - sent,
+                         MSG_NOSIGNAL | MSG_DONTWAIT);
+        if (n < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                struct pollfd pfd;
+                pfd.fd = s->client_fd;
+                pfd.events = POLLOUT;
+                if (poll(&pfd, 1, 5000) <= 0) {
+                    return false;
+                }
+                continue;
+            }
+            return false;
+        }
+        sent += (int)n;
+    }
+    return true;
+}
+
+/*
+ * FD handler callback: called by QEMU main loop when data arrives on TCP socket.
+ *
+ * Only active in IDLE state (between transactions). Processes incoming IRQ
+ * packets through the state machine with proper partial reassembly.
+ * During transactions the fd handler is disabled to avoid racing with
+ * the transaction's own recv loop.
+ */
+static void slab_proxy_fd_read(void *opaque)
+{
+    SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
+    uint8_t buf[64];
 
     if (!s->tcp_connected || s->client_fd < 0) {
         return;
     }
 
-    /* Non-blocking receive */
     while (1) {
-        n = recv(s->client_fd, buf, 6, MSG_DONTWAIT);
+        ssize_t n = recv(s->client_fd, buf, sizeof(buf), MSG_DONTWAIT);
         if (n <= 0) {
+            if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+                slab_proxy_disconnect(s);
+            }
             break;
         }
+        slab_proxy_tcp_feed(s, buf, (int)n);
 
-        if (n == 6 && buf[0] == 'I') {
-            uint32_t irq_num = buf[1] | (buf[2] << 8) | (buf[3] << 16) | (buf[4] << 24);
-            int level = buf[5];
-
-            if (irq_num < s->num_irqs) {
-                qemu_set_irq(s->irqs[irq_num], level);
-            }
+        /* In idle state, a transaction response is a protocol error */
+        if (s->response_ready) {
+            warn_report("Slab Proxy: unexpected transaction response "
+                        "in idle state (discarded)");
+            s->response_ready = false;
         }
     }
-}
-
-/*
- * FD handler callback: called by QEMU main loop when data arrives on TCP socket.
- * This allows IRQ injection from the Python server to work even when the
- * firmware is not accessing peripheral registers (e.g., in its main loop).
- */
-static void slab_proxy_fd_read(void *opaque)
-{
-    SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
-    slab_proxy_check_incoming(s);
 }
 
 /*
@@ -889,6 +1005,7 @@ static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s)
     struct sockaddr_in addr;
     int fd;
     int opt = 1;
+    int flags;
 
     if (s->tcp_connected) {
         return;
@@ -912,8 +1029,20 @@ static void slab_proxy_try_connect_tcp(SlabPeriphProxyState *s)
         return;
     }
 
+    /* Set non-blocking after connect succeeds */
+    flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+    }
+
     s->client_fd = fd;
     s->tcp_connected = true;
+
+    /* Initialize state machine */
+    s->proto_state = RECV_TAG;
+    s->recv_len = 0;
+    s->recv_needed = 0;
+    s->response_ready = false;
 
     /* Register FD handler so QEMU main loop calls us when data arrives.
      * This is critical for IRQ delivery when firmware is idle. */
@@ -949,6 +1078,10 @@ static void slab_proxy_realize(DeviceState *dev, Error **errp)
     s->tcp_connected = false;
     s->shm_fd = -1;
     s->shm_ptr = NULL;
+    s->proto_state = RECV_TAG;
+    s->recv_len = 0;
+    s->recv_needed = 0;
+    s->response_ready = false;
 
     /* Try shared memory first, fall back to TCP */
     if (!slab_proxy_init_shm(s)) {
