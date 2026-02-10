@@ -264,7 +264,7 @@ static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s);
 static void slab_proxy_sync_mpu_state(SlabPeriphProxyState *s)
 {
     ARMCPU *cpu;
-    CPUARMState *env;
+    CPUArchState *env;
     /* volatile: cross-process shared memory access */
     volatile uint32_t *mpu_area;
     int i;
@@ -331,7 +331,7 @@ static void slab_proxy_sync_mpu_state(SlabPeriphProxyState *s)
 static void slab_proxy_save_snapshot(SlabPeriphProxyState *s)
 {
     ARMCPU *cpu;
-    CPUARMState *env;
+    CPUArchState *env;
     /* volatile: cross-process shared memory access */
     volatile uint32_t *snap;
     int i;
@@ -398,7 +398,7 @@ static void slab_proxy_save_snapshot(SlabPeriphProxyState *s)
 static void slab_proxy_restore_snapshot(SlabPeriphProxyState *s)
 {
     ARMCPU *cpu;
-    CPUARMState *env;
+    CPUArchState *env;
     /* volatile: cross-process shared memory access */
     volatile uint32_t *snap;
     int i;
