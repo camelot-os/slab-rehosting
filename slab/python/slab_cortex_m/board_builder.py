@@ -35,17 +35,31 @@ class Board:
         self.uart_output = bytearray()
         self.usb_transactions: list = []
         self.led_states = {}
+        self.hil_peripherals: list = []  # HILPeripheral instances (override emulated)
 
     def find_peripheral(self, addr: int):
+        # HIL peripherals override emulated ones for their address range
+        for hil in self.hil_peripherals:
+            if hil.contains(addr):
+                return hil
         return self.adapter.find_peripheral(addr)
 
     def read(self, addr: int, size: int, secure: bool = True):
+        for hil in self.hil_peripherals:
+            if hil.contains(addr):
+                return hil.read(addr, size, secure)
         return self.adapter.read(addr, size, secure)
 
     def write(self, addr: int, size: int, value: int, secure: bool = True):
+        for hil in self.hil_peripherals:
+            if hil.contains(addr):
+                return hil.write(addr, size, value, secure)
         return self.adapter.write(addr, size, value, secure)
 
     def contains(self, addr: int) -> bool:
+        for hil in self.hil_peripherals:
+            if hil.contains(addr):
+                return True
         return self.adapter.contains(addr)
 
     @property
@@ -131,6 +145,15 @@ def _create_external_device(device_cfg: ExternalDevice):
         )
         log.info(f"Created SSD1306 OLED on {device_cfg.bus}")
         return oled
+
+    elif dtype == 'HIL':
+        from slab_cortex_m.hil_peripheral import create_hil_peripheral
+        hil_config = dict(device_cfg.params)
+        hil_config.setdefault('name', f"{device_cfg.bus}_HIL")
+        hil = create_hil_peripheral(hil_config)
+        log.info(f"Created HIL peripheral {hil.name} on {device_cfg.bus} "
+                 f"(backend={hil_config.get('backend', 'tcp')})")
+        return hil
 
     else:
         log.warning(f"Unknown external device type: {device_cfg.type}")
@@ -360,9 +383,14 @@ def build_board(config: BoardConfig) -> Board:
     for dev_cfg in config.external_devices:
         device = _create_external_device(dev_cfg)
         if device:
-            board.external_devices.append(device)
-            board.bus_devices.setdefault(dev_cfg.bus, []).append(device)
-            _wire_device(board, dev_cfg, device)
+            if dev_cfg.type.upper() == 'HIL':
+                # HIL peripherals override emulated ones by address range
+                board.hil_peripherals.append(device)
+                board.external_devices.append(device)
+            else:
+                board.external_devices.append(device)
+                board.bus_devices.setdefault(dev_cfg.bus, []).append(device)
+                _wire_device(board, dev_cfg, device)
 
     # Wire UART console output capture
     _wire_uart(board)
