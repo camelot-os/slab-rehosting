@@ -28,7 +28,7 @@ from multiprocessing import shared_memory
 SLAB_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(SLAB_ROOT / "python"))
 
-QEMU_BIN = SLAB_ROOT / "qemu" / "build" / "qemu-system-arm"
+QEMU_BIN = SLAB_ROOT.parent / "build" / "qemu-system-arm"
 
 
 # =============================================================================
@@ -206,7 +206,8 @@ class TCPPeripheralServer:
                         if not first:
                             break
                         cmd = chr(first[0])
-                        pkt_len = 10 if cmd in ('R', 'S') else 14
+                        # Read=14B (cmd+addr+size+secure+PC), Write=18B (+value)
+                        pkt_len = 14 if cmd in ('R', 'S') else 18
                         data = client.recv(pkt_len)
                         if not data:
                             break
@@ -548,7 +549,7 @@ def run_benchmark(firmware_path: Path, proxy_type: str, timeout: float = 5.0, qu
         server.start()
         qemu_args = [
             str(QEMU_BIN),
-            "-M", "slab-cortex-m,proxy-mode=tcp,tcp-port=5560",
+            "-M", "slab-cortex-m,tcp-port=5560",
             "-kernel", str(firmware_path),
             "-nographic",
         ]
@@ -557,7 +558,7 @@ def run_benchmark(firmware_path: Path, proxy_type: str, timeout: float = 5.0, qu
         server.start()
         qemu_args = [
             str(QEMU_BIN),
-            "-M", "slab-cortex-m,proxy-mode=shm,shm-name=slab_benchmark",
+            "-M", "slab-cortex-m,shm-name=/slab_benchmark",
             "-kernel", str(firmware_path),
             "-nographic",
         ]
