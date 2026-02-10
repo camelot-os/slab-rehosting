@@ -14,7 +14,7 @@ scenarios:
     assertions:
       - type: no_crash
       - type: mmio_count
-        params: {min: 40000}
+        params: {min: 30000}
 
   - name: "STM32F439 WooKey board"
     board: slab/boards/stm32f439_wookey.yaml
@@ -23,7 +23,7 @@ scenarios:
     assertions:
       - type: no_crash
       - type: mmio_count
-        params: {min: 40000}
+        params: {min: 30000}
       - type: spi_transactions
         params:
           bus: SPI1

@@ -25,4 +25,4 @@ scenarios:
         params: {min: 50}
       - type: uart_contains
         params:
-          text: "Hello"
+          text: "helloworld"
