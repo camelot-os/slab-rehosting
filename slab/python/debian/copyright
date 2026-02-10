@@ -1,0 +1,8 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: slab-cortex-m
+Upstream-Contact: Mathieu Renard <mathieu.renard@twistedwires.io>
+Source: https://github.com/GotoHack/slab-rehosting
+
+Files: *
+Copyright: 2026 Twisted Wires Security Lab
+License: Apache-2.0

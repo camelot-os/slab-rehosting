@@ -1,0 +1,14 @@
+Source: slab-cortex-m
+Section: python
+Priority: optional
+Maintainer: Mathieu Renard <mathieu.renard@twistedwires.io>
+Build-Depends: debhelper-compat (= 13), dh-python, python3-all, python3-setuptools, python3-yaml
+Standards-Version: 4.6.2
+
+Package: python3-slab-cortex-m
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, python3-yaml
+Description: Rehost ARM Cortex-M firmware with Python peripheral control
+ SLAB is a QEMU-based platform for ARM Cortex-M firmware rehosting.
+ All MMIO accesses are forwarded to Python peripheral models via TCP
+ or shared memory, enabling firmware testing without hardware.
