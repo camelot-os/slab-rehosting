@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Hardware-in-the-Loop (HIL) Peripheral for MCUemu
 
@@ -643,8 +644,174 @@ class HILOpenOCDPeripheral(HILPeripheral):
 
 
 # =============================================================================
+# PYOCD HIL PERIPHERAL (JTAG/SWD via pyOCD)
+# =============================================================================
+
+class HILPyOCDPeripheral(HILPeripheral):
+    """
+    Forward peripheral accesses to real hardware via pyOCD.
+
+    Uses pyOCD's Python API directly for memory reads/writes over
+    CMSIS-DAP, ST-Link, or J-Link debug probes.
+
+    Requirements:
+        - pip install pyocd
+        - Debug probe connected (ST-Link, CMSIS-DAP, J-Link)
+        - Target MCU connected and powered
+
+    Example:
+        hil = HILPyOCDPeripheral(
+            name="CRYP_HIL",
+            base=0x50060000,
+            size=0x400,
+            target_type="stm32f439xi"
+        )
+
+    PyOCD target types:
+        - stm32f405rg, stm32f407vg, stm32f439xi
+        - nrf52840, rp2040
+        - Run 'pyocd list --targets' for full list
+    """
+
+    def __init__(self, name: str, base: int, size: int,
+                 target_type: str = "stm32f439xi",
+                 probe_id: Optional[str] = None,
+                 connect_mode: str = "halt",
+                 frequency: int = 4_000_000,
+                 irq: int = -1):
+        super().__init__(name, base, size, irq)
+        self.target_type = target_type
+        self.probe_id = probe_id
+        self.connect_mode = connect_mode
+        self.frequency = frequency
+        self.session = None
+        self.target = None
+
+    async def connect(self) -> bool:
+        """Connect to target via pyOCD (uses thread pool)."""
+        loop = asyncio.get_running_loop()
+        executor = get_io_executor()
+
+        def _connect():
+            from pyocd.core.helpers import ConnectHelper
+
+            kwargs = {
+                'target_override': self.target_type,
+                'connect_mode': self.connect_mode,
+                'frequency': self.frequency,
+            }
+            if self.probe_id:
+                kwargs['unique_id'] = self.probe_id
+
+            session = ConnectHelper.session_with_chosen_probe(**kwargs)
+            session.open()
+            return session
+
+        try:
+            self.session = await loop.run_in_executor(executor, _connect)
+            self.target = self.session.target
+            self.connected = True
+            self.log.info(
+                "Connected to %s via pyOCD (probe=%s)",
+                self.target_type,
+                self.session.probe.unique_id if self.session.probe else "auto"
+            )
+            return True
+        except ImportError:
+            self.log.error("pyocd not installed: pip install pyocd")
+            self.connected = False
+            return False
+        except Exception as e:
+            self.log.error("Failed to connect via pyOCD: %s", e)
+            self.connected = False
+            return False
+
+    async def disconnect(self):
+        """Disconnect from target."""
+        if self.session:
+            loop = asyncio.get_running_loop()
+            executor = get_io_executor()
+            await loop.run_in_executor(executor, self.session.close)
+            self.session = None
+            self.target = None
+        self.connected = False
+
+    async def forward_read(self, addr: int, size: int) -> HILResponse:
+        """Read memory via pyOCD (async via thread pool)."""
+        if not self.target:
+            return HILResponse(0, False, "Not connected")
+
+        loop = asyncio.get_running_loop()
+        executor = get_io_executor()
+
+        def _do_read():
+            if size == 4:
+                return self.target.read32(addr)
+            elif size == 2:
+                return self.target.read16(addr)
+            elif size == 1:
+                return self.target.read8(addr)
+            else:
+                return self.target.read32(addr)
+
+        try:
+            value = await loop.run_in_executor(executor, _do_read)
+            return HILResponse(value, True)
+        except Exception as e:
+            self.connected = False
+            return HILResponse(0, False, str(e))
+
+    async def forward_write(self, addr: int, size: int,
+                            value: int) -> HILResponse:
+        """Write memory via pyOCD (async via thread pool)."""
+        if not self.target:
+            return HILResponse(0, False, "Not connected")
+
+        loop = asyncio.get_running_loop()
+        executor = get_io_executor()
+
+        def _do_write():
+            if size == 4:
+                self.target.write32(addr, value)
+            elif size == 2:
+                self.target.write16(addr, value)
+            elif size == 1:
+                self.target.write8(addr, value)
+            else:
+                self.target.write32(addr, value)
+
+        try:
+            await loop.run_in_executor(executor, _do_write)
+            return HILResponse(value, True)
+        except Exception as e:
+            self.connected = False
+            return HILResponse(0, False, str(e))
+
+
+# =============================================================================
 # HIL PERIPHERAL FACTORY
 # =============================================================================
+
+# Registry of shared pyOCD sessions (keyed by probe_id or target_type)
+_pyocd_sessions: Dict[str, Any] = {}  # str -> HILPyOCDSession
+
+
+def get_shared_pyocd_session(config: dict) -> HILPyOCDSession:
+    """Get or create a shared pyOCD session for session-sharing mode."""
+    target_type = config.get('target_type', 'cortex_m')
+    probe_id = config.get('probe_id')
+    key = probe_id or target_type
+
+    if key not in _pyocd_sessions:
+        _pyocd_sessions[key] = HILPyOCDSession(
+            target_type=target_type,
+            probe_id=probe_id,
+            connect_mode=config.get('connect_mode', 'halt'),
+            frequency=config.get('frequency', 4_000_000),
+        )
+
+    return _pyocd_sessions[key]
+
 
 def create_hil_peripheral(config: dict) -> HILPeripheral:
     """
@@ -655,11 +822,14 @@ def create_hil_peripheral(config: dict) -> HILPeripheral:
             "name": "GPIOA_HIL",
             "base": "0x40020000",
             "size": "0x400",
-            "backend": "serial",  # or "tcp", "openocd"
+            "backend": "pyocd",   # or "serial", "tcp", "openocd", "replay"
+            "target_type": "stm32f439xi",  # for pyocd
             "serial_port": "/dev/ttyUSB0",  # for serial
             "host": "localhost",  # for tcp/openocd
             "port": 5001,  # for tcp/openocd
-            "baudrate": 115200  # for serial
+            "baudrate": 115200,  # for serial
+            "trace_file": "trace.jsonl",  # for replay
+            "shared_session": true,  # for pyocd: share session across regions
         }
     """
     name = config.get('name', 'HIL')
@@ -686,6 +856,25 @@ def create_hil_peripheral(config: dict) -> HILPeripheral:
             port=config.get('port', 6666),
             irq=irq
         )
+    elif backend == 'pyocd':
+        if config.get('shared_session', False):
+            session = get_shared_pyocd_session(config)
+            return session.create_region(name, base, size, irq)
+        return HILPyOCDPeripheral(
+            name=name,
+            base=base,
+            size=size,
+            target_type=config.get('target_type', 'cortex_m'),
+            probe_id=config.get('probe_id'),
+            connect_mode=config.get('connect_mode', 'halt'),
+            frequency=config.get('frequency', 4_000_000),
+            irq=irq
+        )
+    elif backend == 'replay':
+        trace_file = config.get('trace_file', '')
+        if trace_file:
+            return HILReplayPeripheral.from_trace(trace_file, name, base, size)
+        return HILReplayPeripheral(name, base, size, [])
     else:  # tcp
         return HILTCPPeripheral(
             name=name,
@@ -695,6 +884,402 @@ def create_hil_peripheral(config: dict) -> HILPeripheral:
             port=config.get('port', 5001),
             irq=irq
         )
+
+
+# =============================================================================
+# HIL TRACE RECORDING / REPLAY
+# =============================================================================
+
+@dataclass
+class HILTraceRecord:
+    """A single recorded HIL access."""
+    sequence: int
+    timestamp: float           # Seconds since recorder start
+    is_write: bool
+    address: int
+    size: int
+    value: int                 # Write value or read result
+    latency_ms: float = 0.0
+    success: bool = True
+    peripheral_name: str = ""
+
+    def to_dict(self) -> dict:
+        return {
+            'seq': self.sequence,
+            'ts': round(self.timestamp, 6),
+            'rw': 'W' if self.is_write else 'R',
+            'addr': f"0x{self.address:08X}",
+            'size': self.size,
+            'value': f"0x{self.value:08X}",
+            'latency_ms': round(self.latency_ms, 3),
+            'ok': self.success,
+            'periph': self.peripheral_name,
+        }
+
+    @staticmethod
+    def from_dict(d: dict) -> 'HILTraceRecord':
+        return HILTraceRecord(
+            sequence=d.get('seq', 0),
+            timestamp=d.get('ts', 0.0),
+            is_write=(d.get('rw', 'R') == 'W'),
+            address=int(d.get('addr', '0'), 0),
+            size=d.get('size', 4),
+            value=int(d.get('value', '0'), 0),
+            latency_ms=d.get('latency_ms', 0.0),
+            success=d.get('ok', True),
+            peripheral_name=d.get('periph', ''),
+        )
+
+
+class HILTraceRecorder:
+    """
+    Decorator that wraps a HILPeripheral to record all accesses.
+
+    Usage:
+        hil = HILPyOCDPeripheral(name="CRYP", base=0x50060000, size=0x400)
+        recorder = HILTraceRecorder(hil)
+        # Use recorder.peripheral for board integration (drop-in replacement)
+        # After test: recorder.save("trace.jsonl")
+        # Later: replay = HILReplayPeripheral.from_trace("trace.jsonl")
+
+    The recorder intercepts read() and write() calls on the inner peripheral,
+    recording each access with timestamps and latencies.
+    """
+
+    def __init__(self, peripheral: HILPeripheral):
+        self.inner = peripheral
+        self.records: List[HILTraceRecord] = []
+        self._seq = 0
+        self._start_time = time.perf_counter()
+
+    @property
+    def name(self) -> str:
+        return self.inner.name
+
+    @property
+    def base(self) -> int:
+        return self.inner.base
+
+    @property
+    def size(self) -> int:
+        return self.inner.size
+
+    def contains(self, addr: int) -> bool:
+        return self.inner.contains(addr)
+
+    async def read(self, addr: int, size: int, secure: bool = False) -> int:
+        """Record a read access."""
+        t0 = time.perf_counter()
+        value = await self.inner.read(addr, size, secure)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+
+        self._seq += 1
+        self.records.append(HILTraceRecord(
+            sequence=self._seq,
+            timestamp=t0 - self._start_time,
+            is_write=False,
+            address=addr,
+            size=size,
+            value=value if isinstance(value, int) else 0,
+            latency_ms=elapsed_ms,
+            success=True,
+            peripheral_name=self.inner.name,
+        ))
+        return value
+
+    async def write(self, addr: int, size: int, value: int,
+                    secure: bool = False) -> bool:
+        """Record a write access."""
+        t0 = time.perf_counter()
+        result = await self.inner.write(addr, size, value, secure)
+        elapsed_ms = (time.perf_counter() - t0) * 1000
+
+        self._seq += 1
+        self.records.append(HILTraceRecord(
+            sequence=self._seq,
+            timestamp=t0 - self._start_time,
+            is_write=True,
+            address=addr,
+            size=size,
+            value=value,
+            latency_ms=elapsed_ms,
+            success=result if isinstance(result, bool) else True,
+            peripheral_name=self.inner.name,
+        ))
+        return result
+
+    def save(self, path: str):
+        """Save recorded trace to JSON Lines file."""
+        import json
+        with open(path, 'w') as f:
+            for rec in self.records:
+                f.write(json.dumps(rec.to_dict()) + '\n')
+        log.info("Saved %d HIL trace records to %s", len(self.records), path)
+
+    @staticmethod
+    def load(path: str) -> List[HILTraceRecord]:
+        """Load trace records from JSON Lines file."""
+        import json
+        records = []
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    records.append(HILTraceRecord.from_dict(json.loads(line)))
+        return records
+
+    def reset(self):
+        """Clear all recorded traces."""
+        self.records.clear()
+        self._seq = 0
+        self._start_time = time.perf_counter()
+
+
+class HILReplayPeripheral(HILPeripheral):
+    """
+    Replay HIL traces without real hardware.
+
+    Loads a previously recorded trace and replays read values in sequence.
+    Writes are accepted but discarded. This enables:
+    - Offline testing without hardware
+    - Deterministic regression testing
+    - Sharing HIL traces between developers
+
+    Usage:
+        replay = HILReplayPeripheral.from_trace("trace.jsonl")
+        # Use replay as a drop-in replacement for the original HIL peripheral
+    """
+
+    def __init__(self, name: str, base: int, size: int,
+                 records: List[HILTraceRecord]):
+        super().__init__(name, base, size)
+        self.records = records
+        self._read_index = 0
+        # Build address->value map from last seen values for random access
+        self._value_map: Dict[int, int] = {}
+        for rec in records:
+            self._value_map[rec.address] = rec.value
+
+    @classmethod
+    def from_trace(cls, path: str, name: str = "REPLAY",
+                   base: int = 0, size: int = 0) -> 'HILReplayPeripheral':
+        """Create replay peripheral from trace file."""
+        records = HILTraceRecorder.load(path)
+        if not records:
+            return cls(name, base, size, [])
+
+        # Auto-detect base/size from records if not specified
+        if base == 0 and size == 0:
+            addrs = [r.address for r in records]
+            base = min(addrs) & ~0x3FF  # Align to 1KB boundary
+            size = max(addrs) - base + 4
+            name = records[0].peripheral_name or name
+
+        return cls(name, base, size, records)
+
+    async def connect(self) -> bool:
+        self.connected = True
+        return True
+
+    async def disconnect(self):
+        self.connected = False
+
+    async def forward_read(self, addr: int, size: int) -> HILResponse:
+        """Replay recorded read values in order, with address-based fallback."""
+        # Try sequential replay first (matches original access pattern)
+        while self._read_index < len(self.records):
+            rec = self.records[self._read_index]
+            if not rec.is_write and rec.address == addr:
+                self._read_index += 1
+                return HILResponse(rec.value, rec.success)
+            self._read_index += 1
+
+        # Fallback: return last known value for this address
+        if addr in self._value_map:
+            return HILResponse(self._value_map[addr], True)
+
+        return HILResponse(0, True)
+
+    async def forward_write(self, addr: int, size: int,
+                            value: int) -> HILResponse:
+        """Accept writes (update value map for subsequent reads)."""
+        self._value_map[addr] = value
+        return HILResponse(value, True)
+
+    def rewind(self):
+        """Rewind replay to the beginning."""
+        self._read_index = 0
+
+
+# =============================================================================
+# MULTI-REGION PYOCD SESSION SHARING
+# =============================================================================
+
+class HILPyOCDSession:
+    """
+    Shared pyOCD debug session for multiple HIL MMIO regions.
+
+    Instead of opening one pyOCD session per peripheral, this class
+    manages a single session that multiple HILPyOCDRegion instances
+    share. This is important because most debug probes only support
+    one concurrent connection.
+
+    Usage:
+        session = HILPyOCDSession(target_type="stm32f439xi")
+        cryp = session.create_region("CRYP", 0x50060000, 0x400)
+        hash_ = session.create_region("HASH", 0x50060400, 0x400)
+        gpio = session.create_region("GPIOA", 0x40020000, 0x400)
+        # All three share the same SWD connection
+    """
+
+    def __init__(self, target_type: str = "cortex_m",
+                 probe_id: Optional[str] = None,
+                 connect_mode: str = "halt",
+                 frequency: int = 4_000_000):
+        self.target_type = target_type
+        self.probe_id = probe_id
+        self.connect_mode = connect_mode
+        self.frequency = frequency
+        self.session = None
+        self.target = None
+        self.connected = False
+        self.regions: List['HILPyOCDRegion'] = []
+        self.log = logging.getLogger(f'HIL.PyOCD.Session')
+
+    def create_region(self, name: str, base: int, size: int,
+                      irq: int = -1) -> 'HILPyOCDRegion':
+        """Create a new MMIO region backed by this shared session."""
+        region = HILPyOCDRegion(name, base, size, self, irq)
+        self.regions.append(region)
+        return region
+
+    async def connect(self) -> bool:
+        """Open pyOCD session (shared by all regions)."""
+        if self.connected:
+            return True
+
+        loop = asyncio.get_running_loop()
+        executor = get_io_executor()
+
+        def _connect():
+            from pyocd.core.helpers import ConnectHelper
+            kwargs = {
+                'target_override': self.target_type,
+                'connect_mode': self.connect_mode,
+                'frequency': self.frequency,
+            }
+            if self.probe_id:
+                kwargs['unique_id'] = self.probe_id
+            session = ConnectHelper.session_with_chosen_probe(**kwargs)
+            session.open()
+            return session
+
+        try:
+            self.session = await loop.run_in_executor(executor, _connect)
+            self.target = self.session.target
+            self.connected = True
+            self.log.info(
+                "Shared session connected to %s (probe=%s, %d regions)",
+                self.target_type,
+                self.session.probe.unique_id if self.session.probe else "auto",
+                len(self.regions))
+            return True
+        except ImportError:
+            self.log.error("pyocd not installed: pip install pyocd")
+            return False
+        except Exception as e:
+            self.log.error("Failed to connect: %s", e)
+            return False
+
+    async def disconnect(self):
+        """Close shared session."""
+        if self.session:
+            loop = asyncio.get_running_loop()
+            executor = get_io_executor()
+            await loop.run_in_executor(executor, self.session.close)
+            self.session = None
+            self.target = None
+        self.connected = False
+
+    async def read(self, addr: int, size: int) -> HILResponse:
+        """Read memory through the shared session."""
+        if not self.target:
+            return HILResponse(0, False, "Not connected")
+
+        loop = asyncio.get_running_loop()
+        executor = get_io_executor()
+
+        def _do_read():
+            if size == 4:
+                return self.target.read32(addr)
+            elif size == 2:
+                return self.target.read16(addr)
+            elif size == 1:
+                return self.target.read8(addr)
+            return self.target.read32(addr)
+
+        try:
+            value = await loop.run_in_executor(executor, _do_read)
+            return HILResponse(value, True)
+        except Exception as e:
+            self.connected = False
+            return HILResponse(0, False, str(e))
+
+    async def write(self, addr: int, size: int,
+                    value: int) -> HILResponse:
+        """Write memory through the shared session."""
+        if not self.target:
+            return HILResponse(0, False, "Not connected")
+
+        loop = asyncio.get_running_loop()
+        executor = get_io_executor()
+
+        def _do_write():
+            if size == 4:
+                self.target.write32(addr, value)
+            elif size == 2:
+                self.target.write16(addr, value)
+            elif size == 1:
+                self.target.write8(addr, value)
+            else:
+                self.target.write32(addr, value)
+
+        try:
+            await loop.run_in_executor(executor, _do_write)
+            return HILResponse(value, True)
+        except Exception as e:
+            self.connected = False
+            return HILResponse(0, False, str(e))
+
+
+class HILPyOCDRegion(HILPeripheral):
+    """
+    A single MMIO region backed by a shared HILPyOCDSession.
+
+    Multiple HILPyOCDRegion instances can share one debug probe connection.
+    Each region covers a specific address range (e.g. CRYP at 0x50060000).
+    """
+
+    def __init__(self, name: str, base: int, size: int,
+                 session: HILPyOCDSession, irq: int = -1):
+        super().__init__(name, base, size, irq)
+        self.shared_session = session
+
+    async def connect(self) -> bool:
+        result = await self.shared_session.connect()
+        self.connected = result
+        return result
+
+    async def disconnect(self):
+        # Don't close the shared session -- other regions may still use it
+        self.connected = False
+
+    async def forward_read(self, addr: int, size: int) -> HILResponse:
+        return await self.shared_session.read(addr, size)
+
+    async def forward_write(self, addr: int, size: int,
+                            value: int) -> HILResponse:
+        return await self.shared_session.write(addr, size, value)
 
 
 # =============================================================================
