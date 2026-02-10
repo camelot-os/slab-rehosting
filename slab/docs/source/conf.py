@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.abspath('../../python'))
 
 # -- Project information -----------------------------------------------------
 
-project = 'MCUemu'
+project = 'SLAB'
 copyright = f'{datetime.now().year}, Twisted Wires Security Lab'
 author = 'Mathieu Renard'
 release = '1.0.0'
@@ -78,7 +78,7 @@ html_theme_options = {
     "navigation_with_keys": True,
 }
 
-html_title = "MCUemu Documentation"
+html_title = "SLAB Documentation"
 
 # -- Extension configuration -------------------------------------------------
 
