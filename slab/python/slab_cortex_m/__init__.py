@@ -50,6 +50,9 @@ def __getattr__(name):
         # TCP/SHM bridges
         "TCPPeripheralBridge": (".tcp_peripheral", "TCPPeripheralBridge"),
         "SHMPeripheralBridge": (".shm_peripheral", "SHMPeripheralBridge"),
+        # SVD auto-stub
+        "SVDStubPeripheral": (".svd_peripheral", "SVDStubPeripheral"),
+        "SVDStubPeripheralSet": (".svd_peripheral", "SVDStubPeripheralSet"),
         # Emulator adapter (for slab_hw Avatar2/HIL integration)
         "CortexM": (".emulator", "CortexM"),
         "CortexMConfig": (".emulator", "CortexMConfig"),
@@ -97,6 +100,9 @@ __all__ = [
     # Bridges
     "TCPPeripheralBridge",
     "SHMPeripheralBridge",
+    # SVD auto-stub
+    "SVDStubPeripheral",
+    "SVDStubPeripheralSet",
     # Emulator adapter
     "CortexM",
     "CortexMConfig",
