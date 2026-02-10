@@ -883,6 +883,9 @@ class RP2040USB(RP2040Peripheral):
         # DPRAM reference (set by peripheral set after creation)
         self.dpram = None  # type: Optional[RP2040USBDPRAM]
 
+        # USB transaction log (for CI assertions)
+        self.usb_transactions: list = []
+
         # USBIP firmware-in-the-loop state
         self.setup_packet = b''
         self._ep0_expected = 0
@@ -1001,6 +1004,10 @@ class RP2040USB(RP2040Peripheral):
         self.setup_packet = setup_data
         self._ep0_expected = setup_data[6] | (setup_data[7] << 8)
 
+        self.usb_transactions.append({
+            'endpoint': 0, 'direction': 0, 'setup': setup_data,
+            'data': setup_data, 'timestamp': __import__('time').time(),
+        })
         # Set SETUP_REQ interrupt
         self.intr |= self.INT_SETUP_REQ
         self.log.info(f"Injected SETUP: {setup_data.hex()} wLen={self._ep0_expected}")
@@ -1044,6 +1051,11 @@ class RP2040USB(RP2040Peripheral):
         # Check completion: short packet or enough data
         if pkt_len < self._ep0_max_pkt or total >= self._ep0_expected:
             self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
+            self.usb_transactions.append({
+                'endpoint': 0, 'direction': 1,
+                'data': self._ep0_response,
+                'timestamp': __import__('time').time(),
+            })
             self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes")
             self._ep0_event.set()
 

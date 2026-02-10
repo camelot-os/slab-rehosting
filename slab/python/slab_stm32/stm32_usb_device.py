@@ -114,6 +114,16 @@ class EPStatBits(IntEnum):
 
 
 @dataclass
+class USBTransaction:
+    """Record of a USB transaction (SETUP/IN/OUT)."""
+    endpoint: int
+    direction: int       # 0=OUT, 1=IN
+    setup: Optional[bytes] = None  # 8-byte SETUP for control, None for bulk/int
+    data: bytes = b''
+    timestamp: float = field(default_factory=lambda: __import__('time').time())
+
+
+@dataclass
 class EndpointState:
     """State of a USB endpoint."""
     type: int = EPTypeBits.BULK
@@ -218,6 +228,9 @@ class STM32USBDevice(STM32Peripheral):
         self.pma_tracker = UninitializedMemoryTracker(
             "PMA", base=self.pma_base, size=self.PMA_SIZE
         )
+
+        # USB transaction log (for CI assertions)
+        self.usb_transactions: List[USBTransaction] = []
 
         # USBIP firmware-in-the-loop state
         self.setup_packet = b''
@@ -759,6 +772,8 @@ class STM32USBDevice(STM32Peripheral):
         self.setup_packet = setup_data
         self._ep0_expected = setup_data[6] | (setup_data[7] << 8)
 
+        self.usb_transactions.append(USBTransaction(
+            endpoint=0, direction=0, setup=setup_data, data=setup_data))
         self.log.info(f"Injected SETUP: {setup_data.hex()} wLen={self._ep0_expected}")
         ctrm = bool(self._cntr & (1 << USBCntrBits.CTRM))
         self.log.debug(f"CNTR=0x{self._cntr:04x} CTRM={ctrm} ISTR=0x{self._istr:04x} "
@@ -801,6 +816,8 @@ class STM32USBDevice(STM32Peripheral):
         # Check completion: short packet or enough data
         if len(pkt_data) < self._ep0_max_pkt or total >= self._ep0_expected:
             self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
+            self.usb_transactions.append(USBTransaction(
+                endpoint=0, direction=1, data=self._ep0_response))
             self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes")
             self._ep0_event.set()
 

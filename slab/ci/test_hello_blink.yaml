@@ -23,3 +23,6 @@ scenarios:
       - type: no_crash
       - type: mmio_count
         params: {min: 50}
+      - type: uart_contains
+        params:
+          text: "Hello"

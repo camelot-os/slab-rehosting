@@ -28,10 +28,12 @@ class Board:
         self.config = config
         self.adapter = adapter
         self.external_devices = []
+        self.bus_devices: dict = {}  # "SPI1" -> [W25QxxFlash, ...]
         self.name = config.name
         self.qemu_cpu = get_qemu_cpu(config)
         self.clock = get_default_clock(config)
         self.uart_output = bytearray()
+        self.usb_transactions: list = []
         self.led_states = {}
 
     def find_peripheral(self, addr: int):
@@ -359,6 +361,7 @@ def build_board(config: BoardConfig) -> Board:
         device = _create_external_device(dev_cfg)
         if device:
             board.external_devices.append(device)
+            board.bus_devices.setdefault(dev_cfg.bus, []).append(device)
             _wire_device(board, dev_cfg, device)
 
     # Wire UART console output capture

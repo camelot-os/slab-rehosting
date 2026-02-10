@@ -319,6 +319,9 @@ class USBCDCPeripheral:
         self._ep0_expected: int = 0  # Expected total from SETUP wLength
         self._ep0_max_pkt: int = 64  # EP0 max packet size
 
+        # USB transaction log (for CI assertions)
+        self.usb_transactions: list = []
+
         # RX FIFO consumption tracking: bytes consumed since last status pop.
         # Used to auto-pop status entries for firmware that doesn't read GRXSTSP.
         self._rx_fifo_consumed: int = 0
@@ -735,6 +738,10 @@ class USBCDCPeripheral:
         wLength = setup_data[6] | (setup_data[7] << 8)
         self._ep0_expected = wLength
 
+        self.usb_transactions.append({
+            'endpoint': 0, 'direction': 0, 'setup': setup_data,
+            'data': setup_data, 'timestamp': __import__('time').time(),
+        })
         self.log.info(f"Injected SETUP: {setup_data.hex()} "
                      f"(bmReqType=0x{setup_data[0]:02X} bReq=0x{setup_data[1]:02X} "
                      f"wVal=0x{setup_data[2]|setup_data[3]<<8:04X} wLen={wLength})")
@@ -838,6 +845,11 @@ class USBCDCPeripheral:
         # Transfer complete if: short packet OR enough data accumulated
         if pkt_len < self._ep0_max_pkt or total >= self._ep0_expected:
             self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
+            self.usb_transactions.append({
+                'endpoint': 0, 'direction': 1,
+                'data': self._ep0_response,
+                'timestamp': __import__('time').time(),
+            })
             self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes: "
                          f"{self._ep0_response.hex()}")
             if self._ep0_event:

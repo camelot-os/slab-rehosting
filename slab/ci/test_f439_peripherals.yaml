@@ -24,3 +24,7 @@ scenarios:
       - type: no_crash
       - type: mmio_count
         params: {min: 40000}
+      - type: spi_transactions
+        params:
+          bus: SPI1
+          min_count: 1

@@ -23,6 +23,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -231,6 +232,183 @@ def _check_mmio_count_val(mmio_count: int, params: dict) -> AssertionResult:
     )
 
 
+def check_spi_transactions(board, params: dict) -> AssertionResult:
+    """Check SPI transaction count and optional MOSI pattern."""
+    bus = params.get('bus', 'SPI1')
+    min_count = params.get('min_count', 1)
+    contains_mosi = params.get('contains_mosi', '')
+
+    devices = board.bus_devices.get(bus, [])
+    all_txns = []
+    for dev in devices:
+        if hasattr(dev, 'get_transaction_log'):
+            all_txns.extend(dev.get_transaction_log())
+
+    # Filter to SPI transactions only
+    from slab_cortex_m.virtual_components import SPITransaction
+    spi_txns = [t for t in all_txns if isinstance(t, SPITransaction)]
+    count = len(spi_txns)
+
+    if count < min_count:
+        return AssertionResult(
+            name=f"spi_transactions({bus}>={min_count})",
+            passed=False,
+            detail=f"count={count} (min={min_count})")
+
+    if contains_mosi:
+        pattern = bytes.fromhex(contains_mosi.replace(' ', ''))
+        found = any(pattern in t.mosi for t in spi_txns)
+        if not found:
+            return AssertionResult(
+                name=f"spi_transactions({bus} contains {contains_mosi})",
+                passed=False,
+                detail=f"MOSI pattern not found in {count} transactions")
+
+    return AssertionResult(
+        name=f"spi_transactions({bus}>={min_count})",
+        passed=True,
+        detail=f"count={count}")
+
+
+def check_i2c_transactions(board, params: dict) -> AssertionResult:
+    """Check I2C transaction count with optional address and data filter."""
+    bus = params.get('bus', 'I2C1')
+    min_count = params.get('min_count', 1)
+    address = params.get('address', None)
+    contains_data = params.get('contains_data', '')
+
+    devices = board.bus_devices.get(bus, [])
+    all_txns = []
+    for dev in devices:
+        if hasattr(dev, 'get_transaction_log'):
+            all_txns.extend(dev.get_transaction_log())
+
+    # Filter to I2C transactions only
+    from slab_cortex_m.virtual_components import I2CTransaction
+    i2c_txns = [t for t in all_txns if isinstance(t, I2CTransaction)]
+
+    if address is not None:
+        addr_val = address if isinstance(address, int) else int(str(address), 0)
+        i2c_txns = [t for t in i2c_txns if t.address == addr_val]
+
+    count = len(i2c_txns)
+
+    if count < min_count:
+        addr_str = f" @0x{address:02X}" if address is not None else ""
+        return AssertionResult(
+            name=f"i2c_transactions({bus}{addr_str}>={min_count})",
+            passed=False,
+            detail=f"count={count} (min={min_count})")
+
+    if contains_data:
+        pattern = bytes.fromhex(contains_data.replace(' ', ''))
+        found = any(pattern in t.data for t in i2c_txns)
+        if not found:
+            return AssertionResult(
+                name=f"i2c_transactions({bus} contains {contains_data})",
+                passed=False,
+                detail=f"data pattern not found in {count} transactions")
+
+    addr_str = f" @0x{address:02X}" if address is not None else ""
+    return AssertionResult(
+        name=f"i2c_transactions({bus}{addr_str}>={min_count})",
+        passed=True,
+        detail=f"count={count}")
+
+
+def check_uart_contains(board, params: dict) -> AssertionResult:
+    """Check board UART output for substring or regex match."""
+    text = params.get('text', '')
+    pattern = params.get('regex', '')
+    uart_str = board.uart_output.decode('utf-8', errors='replace')
+
+    if text:
+        ok = text in uart_str
+        return AssertionResult(
+            name=f"uart_contains('{text}')",
+            passed=ok,
+            detail=f"found={ok}, output={uart_str[:80]!r}")
+
+    if pattern:
+        match = re.search(pattern, uart_str)
+        ok = match is not None
+        return AssertionResult(
+            name=f"uart_contains(regex={pattern!r})",
+            passed=ok,
+            detail=f"found={ok}, output={uart_str[:80]!r}")
+
+    return AssertionResult(
+        name="uart_contains",
+        passed=False,
+        detail="no 'text' or 'regex' param specified")
+
+
+def check_usb_setup(board, params: dict) -> AssertionResult:
+    """Check USB SETUP transaction count and optional VID/PID."""
+    min_count = params.get('min_count', 1)
+    expected_vid = params.get('vid', None)
+    expected_pid = params.get('pid', None)
+
+    # Collect USB transactions from board or from USB peripherals
+    usb_txns = list(board.usb_transactions)
+    if not usb_txns:
+        # Try to find USB peripheral in the adapter
+        for p in board.adapter.peripherals:
+            if hasattr(p, 'usb_transactions'):
+                usb_txns.extend(p.usb_transactions)
+
+    # Filter SETUP transactions (direction=0 with setup data)
+    setup_txns = []
+    for t in usb_txns:
+        setup = t.get('setup') if isinstance(t, dict) else getattr(t, 'setup', None)
+        if setup is not None:
+            setup_txns.append(t)
+
+    count = len(setup_txns)
+
+    if count < min_count:
+        return AssertionResult(
+            name=f"usb_setup(>={min_count})",
+            passed=False,
+            detail=f"count={count} (min={min_count})")
+
+    # Optional VID/PID check: look for device descriptor response
+    if expected_vid is not None or expected_pid is not None:
+        vid_val = expected_vid if isinstance(expected_vid, int) else int(str(expected_vid), 0)
+        pid_val = expected_pid if isinstance(expected_pid, int) else int(str(expected_pid), 0)
+
+        # Look for IN transactions (direction=1) with device descriptor data (>=18 bytes)
+        found_vid_pid = False
+        for t in usb_txns:
+            direction = t.get('direction') if isinstance(t, dict) else getattr(t, 'direction', -1)
+            data = t.get('data', b'') if isinstance(t, dict) else getattr(t, 'data', b'')
+            if direction == 1 and len(data) >= 18:
+                # Device descriptor: VID at bytes 8-9, PID at bytes 10-11 (little-endian)
+                if data[1] == 0x01:  # bDescriptorType == DEVICE
+                    vid = data[8] | (data[9] << 8)
+                    pid = data[10] | (data[11] << 8)
+                    if (expected_vid is None or vid == vid_val) and \
+                       (expected_pid is None or pid == pid_val):
+                        found_vid_pid = True
+                        break
+
+        if not found_vid_pid:
+            return AssertionResult(
+                name=f"usb_setup(VID=0x{vid_val:04X} PID=0x{pid_val:04X})",
+                passed=False,
+                detail=f"VID/PID not found in {count} SETUP transactions")
+
+        return AssertionResult(
+            name=f"usb_setup(VID=0x{vid_val:04X} PID=0x{pid_val:04X})",
+            passed=True,
+            detail=f"count={count}")
+
+    return AssertionResult(
+        name=f"usb_setup(>={min_count})",
+        passed=True,
+        detail=f"count={count}")
+
+
 # =============================================================================
 # CI RUNNER
 # =============================================================================
@@ -333,7 +511,7 @@ class CIRunner:
 
             # Run assertions
             self._check_assertions(scenario, result, server.gpio_toggles,
-                                   server.mmio_count)
+                                   server.mmio_count, board=board)
 
             # Cleanup
             server.running = False
@@ -422,7 +600,7 @@ class CIRunner:
             result.mmio_count = handler.mmio_count
 
             self._check_assertions(scenario, result, handler.gpio_toggles,
-                                   handler.mmio_count)
+                                   handler.mmio_count, board=board)
 
             # Cleanup SHM
             bridge._running = False
@@ -444,19 +622,51 @@ class CIRunner:
         return result
 
     def _check_assertions(self, scenario: Scenario, result: ScenarioResult,
-                          gpio_toggles: dict, mmio_count: int):
+                          gpio_toggles: dict, mmio_count: int,
+                          board=None):
         """Run assertions for a scenario result."""
         for assertion in scenario.assertions:
             if assertion.type == 'no_crash':
                 result.assertions.append(
                     check_no_crash(result, assertion.params))
             elif assertion.type == 'gpio_toggle':
-                # Build a minimal object with gpio_toggles attribute
                 result.assertions.append(
                     _check_gpio_toggle_dict(gpio_toggles, assertion.params))
             elif assertion.type == 'mmio_count':
                 result.assertions.append(
                     _check_mmio_count_val(mmio_count, assertion.params))
+            elif assertion.type == 'spi_transactions':
+                if board:
+                    result.assertions.append(
+                        check_spi_transactions(board, assertion.params))
+                else:
+                    result.assertions.append(AssertionResult(
+                        name="spi_transactions", passed=False,
+                        detail="board not available"))
+            elif assertion.type == 'i2c_transactions':
+                if board:
+                    result.assertions.append(
+                        check_i2c_transactions(board, assertion.params))
+                else:
+                    result.assertions.append(AssertionResult(
+                        name="i2c_transactions", passed=False,
+                        detail="board not available"))
+            elif assertion.type == 'uart_contains':
+                if board:
+                    result.assertions.append(
+                        check_uart_contains(board, assertion.params))
+                else:
+                    result.assertions.append(AssertionResult(
+                        name="uart_contains", passed=False,
+                        detail="board not available"))
+            elif assertion.type == 'usb_setup':
+                if board:
+                    result.assertions.append(
+                        check_usb_setup(board, assertion.params))
+                else:
+                    result.assertions.append(AssertionResult(
+                        name="usb_setup", passed=False,
+                        detail="board not available"))
             else:
                 result.assertions.append(AssertionResult(
                     name=assertion.type,

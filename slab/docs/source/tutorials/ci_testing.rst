@@ -21,8 +21,10 @@ SLAB enables deterministic, reproducible firmware execution in CI pipelines:
 **Key Principles:**
 
 1. **Deterministic Execution**
-   QEMU provides cycle-accurate CPU emulation with reproducible timing. The same
-   firmware binary always produces the same behavior.
+   QEMU provides functionally deterministic emulation: the same firmware binary
+   with the same peripheral responses always follows the same execution path.
+   Note that QEMU TCG is not cycle-accurate -- it does not model pipeline
+   stages, cache latencies, or flash wait states.
 
 2. **Machine-Readable Output**
    Test results are exported in standard formats:
@@ -41,7 +43,9 @@ SLAB enables deterministic, reproducible firmware execution in CI pipelines:
    - No crashes (clean QEMU exit)
    - Minimum activity threshold (MMIO operations)
    - GPIO toggles (LED blink tests)
-   - UART output matching (future)
+   - SPI/I2C bus transaction verification
+   - UART output matching (substring or regex)
+   - USB SETUP transaction and VID/PID checks
 
 Step 1: Writing a CI Scenario YAML
 ===================================
@@ -164,18 +168,108 @@ state changes. A toggle is any 0→1 or 1→0 transition.
 
 With a 5-second timeout, expect ~10 toggles. Set ``min_toggles: 8`` for safety margin.
 
-uart_output (Future)
---------------------
+spi_transactions
+----------------
 
-Planned assertion to match UART output against expected strings.
+Verifies that SPI bus transactions occurred between firmware and wired external devices.
 
 .. code-block:: yaml
 
    assertions:
-     - type: uart_output
+     - type: spi_transactions
        params:
-         contains: "Boot complete"
-         regex: "Temperature: \\d+\\.\\d+°C"
+         bus: SPI1              # Match device wired to SPI1
+         min_count: 3           # At least 3 SPI transfers
+         contains_mosi: "9F"    # Optional: MOSI hex pattern (e.g. JEDEC ID cmd)
+
+**Parameters:**
+
+- ``bus``: Name of the SPI bus peripheral (must match board YAML wiring)
+- ``min_count``: Minimum number of SPI transactions
+- ``contains_mosi``: Optional hex string to search for in MOSI data
+
+**How It Works:**
+
+Iterates over external devices wired to the specified bus (via ``bus_devices``),
+collects their transaction logs, and checks count and optional MOSI pattern match.
+
+i2c_transactions
+----------------
+
+Verifies that I2C bus transactions occurred with optional address and data filtering.
+
+.. code-block:: yaml
+
+   assertions:
+     - type: i2c_transactions
+       params:
+         bus: I2C1              # Match device wired to I2C1
+         address: 0x50          # Optional: filter by 7-bit I2C address
+         min_count: 2
+         contains_data: "00 42" # Optional: hex pattern in write data
+
+**Parameters:**
+
+- ``bus``: Name of the I2C bus peripheral
+- ``min_count``: Minimum number of I2C transactions
+- ``address``: Optional 7-bit I2C address filter (e.g. ``0x50`` for EEPROM)
+- ``contains_data``: Optional hex string to search for in transaction data
+
+uart_contains
+-------------
+
+Verifies that UART output contains expected text or matches a regex pattern.
+
+.. code-block:: yaml
+
+   assertions:
+     - type: uart_contains
+       params:
+         text: "Hello"          # Substring match
+
+.. code-block:: yaml
+
+   assertions:
+     - type: uart_contains
+       params:
+         regex: "Temperature: \\d+\\.\\d+C"  # Regex match
+
+**Parameters (mutually exclusive):**
+
+- ``text``: Substring to search for in UART output
+- ``regex``: Regular expression pattern to match
+
+**How It Works:**
+
+The board builder automatically captures all UART/USART peripheral TX bytes into
+``board.uart_output``. This assertion decodes the output as UTF-8 and performs
+the specified match.
+
+usb_setup
+---------
+
+Verifies that USB SETUP transactions occurred, with optional VID/PID validation.
+
+.. code-block:: yaml
+
+   assertions:
+     - type: usb_setup
+       params:
+         min_count: 1           # At least 1 SETUP transaction
+         vid: 0x0483            # Optional: expected Vendor ID
+         pid: 0x5740            # Optional: expected Product ID
+
+**Parameters:**
+
+- ``min_count``: Minimum number of USB SETUP transactions
+- ``vid``: Optional Vendor ID to check in device descriptor response
+- ``pid``: Optional Product ID to check in device descriptor response
+
+**How It Works:**
+
+USB peripherals (DWC2, PMA USB, RP2040 USB) log each ``inject_setup_packet()``
+call and EP0 IN completion. The VID/PID check inspects the device descriptor
+response data (18 bytes, bytes 8-11 contain VID and PID in little-endian).
 
 Step 3: Running Tests Locally
 ==============================
