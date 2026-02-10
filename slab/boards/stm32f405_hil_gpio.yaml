@@ -1,0 +1,27 @@
+# STM32F405 Hardware-in-the-Loop: GPIO on real silicon
+#
+# This board forwards GPIOA to a real STM32F405 connected via
+# ST-Link/SWD using pyOCD. All other peripherals (RCC, USART,
+# Flash, etc.) are emulated by SLAB.
+#
+# Usage:
+#   1. Connect STM32F405 board via ST-Link
+#   2. pip install pyocd
+#   3. Run: python3 -m slab_cortex_m.mcuemu_server --board slab/boards/stm32f405_hil_gpio.yaml
+#
+# GPIOA at 0x40020000 will be read/written on the real MCU.
+# Firmware running in QEMU can toggle real GPIO pins transparently.
+
+name: STM32F405_HIL_GPIO
+mcu: STM32F405
+
+external_devices:
+  # GPIOA forwarded to real hardware via pyOCD
+  - type: HIL
+    bus: GPIOA
+    params:
+      backend: pyocd
+      target_type: stm32f405rg
+      base: "0x40020000"
+      size: "0x400"
+      connect_mode: under-reset

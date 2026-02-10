@@ -1,0 +1,41 @@
+# STM32F439 Hardware-in-the-Loop: CRYP on real silicon
+#
+# This board forwards the CRYP peripheral (AES/DES/HASH) to a real
+# STM32F439 connected via ST-Link/SWD using pyOCD. All other peripherals
+# (RCC, GPIO, USART, Flash, etc.) are emulated by SLAB.
+#
+# Both CRYP and HASH share a single pyOCD session (one SWD connection).
+#
+# Usage:
+#   1. Connect STM32F439 board via ST-Link
+#   2. pip install pyocd
+#   3. Run: python3 -m slab_cortex_m.mcuemu_server --board slab/boards/stm32f439_hil_crypto.yaml
+#
+# The CRYP accelerator at 0x50060000 will be read/written on the real MCU.
+# Firmware running in QEMU can use hardware AES/DES/HASH transparently.
+
+name: STM32F439_HIL_Crypto
+mcu: STM32F439
+
+external_devices:
+  # CRYP peripheral forwarded to real hardware via pyOCD (shared session)
+  - type: HIL
+    bus: CRYP
+    params:
+      backend: pyocd
+      target_type: stm32f439xi
+      base: "0x50060000"
+      size: "0x400"
+      connect_mode: under-reset
+      shared_session: true
+
+  # HASH peripheral forwarded to real hardware via pyOCD (shared session)
+  - type: HIL
+    bus: HASH
+    params:
+      backend: pyocd
+      target_type: stm32f439xi
+      base: "0x50060400"
+      size: "0x400"
+      connect_mode: under-reset
+      shared_session: true
