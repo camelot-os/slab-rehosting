@@ -224,9 +224,60 @@ The debug dashboard connects to peripheral callbacks:
    # All signals → Logic analyzer
    capture.record("GPIO_PA5", value)
 
+Hardware-in-the-Loop Integration
+=================================
+
+SLAB supports selective hardware forwarding where specific peripheral
+address ranges are proxied to real silicon via debug probes, while
+all other peripherals remain emulated locally.
+
+.. code-block:: text
+
+   Firmware → QEMU → Proxy → Python Server
+                                ├── Emulated: RCC, GPIO, USART, Flash, ...
+                                └── HIL: CRYP, HASH → pyOCD → Real MCU (SWD)
+
+HIL peripherals are configured in board YAML using ``type: HIL``:
+
+.. code-block:: yaml
+
+   external_devices:
+     - type: HIL
+       bus: CRYP
+       params:
+         backend: pyocd
+         target_type: stm32f439xi
+         base: "0x50060000"
+         size: "0x400"
+         shared_session: true
+
+**Supported backends:**
+
+- **pyOCD**: Direct Python API to CMSIS-DAP, ST-Link, J-Link probes
+- **OpenOCD**: TCL interface to running OpenOCD instance
+- **Serial**: UART bridge firmware on target MCU
+- **TCP**: Remote hardware server
+- **Replay**: Offline replay of recorded HIL traces
+
+**Key features:**
+
+- Session sharing across multiple MMIO regions (one probe connection)
+- Trace recording (JSON Lines) for every forwarded access
+- Offline replay without hardware for CI integration
+- ``CortexM`` / ``Emulator`` adapter classes for Avatar2-style workflows
+
+Typical latency is 1-5 ms per forwarded access over SWD, which is acceptable
+for peripheral initialization sequences and register configuration, but not
+for tight polling loops. The selective approach ensures only the peripherals
+that need real silicon are forwarded.
+
+See :ref:`hardware_in_the_loop` for a complete tutorial.
+
+
 Next Steps
 ==========
 
 * :ref:`proxy_protocol` - Detailed protocol specification
 * :ref:`peripheral_model` - Peripheral implementation guide
+* :ref:`hardware_in_the_loop` - Hardware-in-the-Loop tutorial
 * :ref:`api/slab_cortex_m` - Core API reference

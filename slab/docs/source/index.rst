@@ -18,6 +18,7 @@ Key Features
 * **Generic QEMU Machine**: Single ``slab-cortex-m`` machine supporting all Cortex-M variants (M0 to M85)
 * **Python Peripheral Control**: All MMIO accesses forwarded to Python via TCP or shared memory
 * **Multi-MCU Support**: STM32, NXP, Nordic, RP2040/2350 peripheral libraries included
+* **Hardware-in-the-Loop**: Forward selected peripherals to real silicon via pyOCD/SWD
 * **Real-time Visualization**: Debug dashboard with logic analyzer, console I/O, and LED status
 * **Export Formats**: VCD and Sigrok-compatible captures for external analysis
 
@@ -58,6 +59,7 @@ Documentation
    tutorials/ci_testing
    tutorials/adding_usb_support
    tutorials/creating_ui_peripherals
+   tutorials/hardware_in_the_loop
    tutorials/debugging_bootloops
    tutorials/trustzone_emulation
 

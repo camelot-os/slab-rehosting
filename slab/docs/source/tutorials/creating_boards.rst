@@ -192,6 +192,24 @@ LEDs are tracked for visualization and testing:
        pin: 13                  # GPIO pin number
        color: green             # Color for GUI display
 
+Hardware-in-the-Loop (HIL) Devices
+-----------------------------------
+
+Any peripheral can be forwarded to real hardware using ``type: HIL``.
+See :ref:`hardware_in_the_loop` for a complete tutorial.
+
+.. code-block:: yaml
+
+   - type: HIL
+     bus: CRYP                  # Peripheral name (for documentation)
+     params:
+       backend: pyocd           # pyocd, openocd, serial, tcp, or replay
+       target_type: stm32f439xi # pyOCD target type
+       base: "0x50060000"       # MMIO base address to forward
+       size: "0x400"            # Address range size
+       connect_mode: under-reset
+       shared_session: true     # Share probe connection with other HIL entries
+
 
 Step 4: QEMU Memory Layout Configuration
 =========================================
