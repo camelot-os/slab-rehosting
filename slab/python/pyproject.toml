@@ -1,8 +1,8 @@
-# Slab Cortex-M Package
+# SLAB -- Software Lab for ARM Cortex-M Peripheral Emulation
 #
 # Author: Mathieu Renard <mathieu.renard@twistedwires.io>
-# Copyright (C) 2025 Twisted Wires Security Lab
-# SPDX-License-Identifier: GPL-2.0-or-later
+# Copyright (C) 2026 Twisted Wires Security Lab
+# SPDX-License-Identifier: Apache-2.0
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
@@ -11,47 +11,46 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "slab-cortex-m"
 version = "0.1.0"
-description = "ARM Cortex-M emulation core for Slab"
-readme = "README.md"
-license = {text = "GPL-2.0-or-later"}
+description = "Rehost ARM Cortex-M firmware with Python peripheral control"
+license = {text = "Apache-2.0"}
 authors = [
     {name = "Mathieu Renard", email = "mathieu.renard@twistedwires.io"}
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v2 or later (GPLv2+)",
-    "Operating System :: OS Independent",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Security",
-    "Topic :: System :: Emulators",
     "Topic :: Software Development :: Embedded Systems",
+    "Topic :: System :: Emulators",
 ]
 keywords = ["arm", "cortex-m", "emulator", "embedded", "security", "svd", "qemu"]
 dependencies = [
-    "numpy>=1.20.0",
+    "PyYAML>=6.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-cov>=4.0.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
-    "mypy>=1.0.0",
-]
-gui = ["pygame>=2.0.0"]
+crypto = ["cryptography>=41.0"]
+gui = ["pygame>=2.5"]
 usb = ["pyusb>=1.2.0"]
+mcp = ["mcp>=0.1"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "sphinx>=5.0",
+    "furo>=2023.1",
+]
 
 [project.scripts]
 slab-server = "slab_cortex_m.mcuemu_server:main"
+slab-mcp = "slab_mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/twistedwires/slab"
@@ -59,19 +58,16 @@ Documentation = "https://slab.readthedocs.io/"
 Repository = "https://github.com/twistedwires/slab"
 Issues = "https://github.com/twistedwires/slab/issues"
 
-[tool.setuptools]
-packages = ["slab_cortex_m", "slab_cortex_m.peripherals", "slab_cortex_m.exercises", "slab_cortex_m.tests", "slab_cortex_m.templates"]
-package-dir = {"slab_cortex_m" = "."}
+[tool.setuptools.packages.find]
+include = ["slab_*"]
+
+[tool.pytest.ini_options]
+testpaths = ["../tests"]
 
 [tool.black]
 line-length = 100
-target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+target-version = ["py39", "py310", "py311", "py312"]
 
 [tool.isort]
 profile = "black"
 line_length = 100
-
-[tool.mypy]
-python_version = "3.8"
-warn_return_any = true
-warn_unused_configs = true
