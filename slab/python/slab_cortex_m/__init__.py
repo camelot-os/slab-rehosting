@@ -50,6 +50,11 @@ def __getattr__(name):
         # TCP/SHM bridges
         "TCPPeripheralBridge": (".tcp_peripheral", "TCPPeripheralBridge"),
         "SHMPeripheralBridge": (".shm_peripheral", "SHMPeripheralBridge"),
+        # Emulator adapter (for slab_hw Avatar2/HIL integration)
+        "CortexM": (".emulator", "CortexM"),
+        "CortexMConfig": (".emulator", "CortexMConfig"),
+        "Emulator": (".emulator", "Emulator"),
+        "EmulatorConfig": (".emulator", "EmulatorConfig"),
     }
 
     if name in _exports:
@@ -92,4 +97,9 @@ __all__ = [
     # Bridges
     "TCPPeripheralBridge",
     "SHMPeripheralBridge",
+    # Emulator adapter
+    "CortexM",
+    "CortexMConfig",
+    "Emulator",
+    "EmulatorConfig",
 ]
