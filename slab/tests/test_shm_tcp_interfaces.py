@@ -1009,6 +1009,319 @@ class TestMpuSyncFromShm(unittest.TestCase):
 
 
 # =============================================================================
+# PMSAv8 MPU TESTS (ARMv8-M: Cortex-M23/M33/M55/M85)
+# =============================================================================
+
+class TestPMSAv8MPU(unittest.TestCase):
+    """Test PMSAv8 MPU (limit-based, 2-bit AP, MAIR)."""
+
+    def setUp(self):
+        from slab_peripherals.mpu import (
+            CortexMPU, MPUReg, MPUCtrlBits, MPURegion,
+            AccessPermissionV8,
+        )
+        self.CortexMPU = CortexMPU
+        self.MPUReg = MPUReg
+        self.MPUCtrlBits = MPUCtrlBits
+        self.MPURegion = MPURegion
+        self.AccessPermissionV8 = AccessPermissionV8
+
+    def test_v8m_region_from_rbar_rlar(self):
+        """Decode PMSAv8 RBAR + RLAR register values."""
+        # RBAR: base=0x20000000, SH=inner(3), AP=RW_ANY(01), XN=0
+        rbar = 0x20000000 | (3 << 3) | (0b01 << 1) | 0
+        # RLAR: limit=0x2003FFE0, AttrIndx=2, EN=1
+        rlar = 0x2003FFE0 | (2 << 1) | 1
+
+        r = self.MPURegion.from_rbar_rlar(0, rbar, rlar)
+        self.assertTrue(r.enabled)
+        self.assertTrue(r._v8m)
+        self.assertEqual(r.base, 0x20000000)
+        self.assertEqual(r.limit, 0x2003FFE0)
+        self.assertEqual(r.sh, 3)  # Inner shareable
+        self.assertEqual(r.ap, self.AccessPermissionV8.RW_ANY)
+        self.assertFalse(r.xn)
+        self.assertEqual(r.attr_idx, 2)
+
+    def test_v8m_region_contains_limit_based(self):
+        """PMSAv8 regions use limit-based addressing (inclusive end)."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (3 << 3) | (0b01 << 1),  # RBAR
+            0x2003FFE0 | (0 << 1) | 1,             # RLAR: limit=0x2003FFE0, EN=1
+        )
+        # Region covers 0x20000000 to 0x2003FFFF (limit | 0x1F)
+        self.assertTrue(r.contains(0x20000000))
+        self.assertTrue(r.contains(0x20020000))
+        self.assertTrue(r.contains(0x2003FFFF))
+        self.assertFalse(r.contains(0x20040000))
+        self.assertFalse(r.contains(0x1FFFFFFF))
+
+    def test_v8m_region_end_property(self):
+        """end property returns limit | 0x1F + 1 for v8M."""
+        r = self.MPURegion.from_rbar_rlar(0, 0x20000000, 0x2003FFE0 | 1)
+        self.assertEqual(r.end, 0x20040000)
+
+    def test_v8m_ap_rw_priv_only(self):
+        """AP=00: RW privileged only."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (0b00 << 1),  # AP=RW_PRIV
+            0x2003FFE0 | 1,
+        )
+        self.assertTrue(r.check_permission(is_write=True, is_privileged=True, is_instruction=False))
+        self.assertTrue(r.check_permission(is_write=False, is_privileged=True, is_instruction=False))
+        self.assertFalse(r.check_permission(is_write=True, is_privileged=False, is_instruction=False))
+        self.assertFalse(r.check_permission(is_write=False, is_privileged=False, is_instruction=False))
+
+    def test_v8m_ap_rw_any(self):
+        """AP=01: RW any privilege."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (0b01 << 1),  # AP=RW_ANY
+            0x2003FFE0 | 1,
+        )
+        self.assertTrue(r.check_permission(is_write=True, is_privileged=True, is_instruction=False))
+        self.assertTrue(r.check_permission(is_write=True, is_privileged=False, is_instruction=False))
+        self.assertTrue(r.check_permission(is_write=False, is_privileged=False, is_instruction=False))
+
+    def test_v8m_ap_ro_priv_only(self):
+        """AP=10: RO privileged only."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (0b10 << 1),  # AP=RO_PRIV
+            0x2003FFE0 | 1,
+        )
+        self.assertTrue(r.check_permission(is_write=False, is_privileged=True, is_instruction=False))
+        self.assertFalse(r.check_permission(is_write=True, is_privileged=True, is_instruction=False))
+        self.assertFalse(r.check_permission(is_write=False, is_privileged=False, is_instruction=False))
+
+    def test_v8m_ap_ro_any(self):
+        """AP=11: RO any privilege."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (0b11 << 1),  # AP=RO_ANY
+            0x2003FFE0 | 1,
+        )
+        self.assertTrue(r.check_permission(is_write=False, is_privileged=True, is_instruction=False))
+        self.assertTrue(r.check_permission(is_write=False, is_privileged=False, is_instruction=False))
+        self.assertFalse(r.check_permission(is_write=True, is_privileged=True, is_instruction=False))
+
+    def test_v8m_xn_blocks_execution(self):
+        """XN bit prevents instruction fetch."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (0b01 << 1) | 1,  # XN=1
+            0x2003FFE0 | 1,
+        )
+        self.assertTrue(r.xn)
+        self.assertFalse(r.check_permission(is_write=False, is_privileged=True, is_instruction=True))
+        self.assertTrue(r.check_permission(is_write=False, is_privileged=True, is_instruction=False))
+
+    def test_v8m_to_rbar_rlar_roundtrip(self):
+        """RBAR/RLAR encode+decode roundtrip."""
+        r_orig = self.MPURegion.from_rbar_rlar(
+            3,
+            0x08000000 | (2 << 3) | (0b10 << 1) | 0,  # SH=outer, AP=RO_PRIV, XN=0
+            0x080FFFE0 | (5 << 1) | 1,                 # AttrIndx=5, EN=1
+        )
+        rbar = r_orig.to_rbar_v8()
+        rlar = r_orig.to_rlar_v8()
+        r_decoded = self.MPURegion.from_rbar_rlar(3, rbar, rlar)
+
+        self.assertEqual(r_decoded.base, r_orig.base)
+        self.assertEqual(r_decoded.limit, r_orig.limit)
+        self.assertEqual(r_decoded.sh, r_orig.sh)
+        self.assertEqual(r_decoded.ap, r_orig.ap)
+        self.assertEqual(r_decoded.xn, r_orig.xn)
+        self.assertEqual(r_decoded.attr_idx, r_orig.attr_idx)
+        self.assertEqual(r_decoded.enabled, r_orig.enabled)
+
+    def test_v8m_mpu_register_readwrite(self):
+        """Test CortexMPU v8M register read/write."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+
+        # TYPE register
+        self.assertEqual(mpu.read_register(self.MPUReg.TYPE), 8 << 8)
+
+        # Set region 0
+        mpu.write_register(self.MPUReg.RNR, 0)
+        # RBAR: base=0x20000000, SH=inner(3), AP=RW_ANY(01), XN=0
+        mpu.write_register(self.MPUReg.RBAR, 0x20000000 | (3 << 3) | (0b01 << 1))
+        # RLAR: limit=0x2003FFE0, AttrIndx=0, EN=1
+        mpu.write_register(self.MPUReg.RLAR, 0x2003FFE0 | (0 << 1) | 1)
+
+        r = mpu.regions[0]
+        self.assertEqual(r.base, 0x20000000)
+        self.assertEqual(r.limit, 0x2003FFE0)
+        self.assertEqual(r.sh, 3)
+        self.assertEqual(r.ap, 0b01)
+        self.assertTrue(r.enabled)
+        self.assertTrue(r._v8m)
+
+    def test_v8m_mpu_mair_registers(self):
+        """Test MAIR0/MAIR1 read/write."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+
+        mpu.write_register(self.MPUReg.MAIR0, 0x44BB00FF)
+        mpu.write_register(self.MPUReg.MAIR1, 0x00000044)
+
+        self.assertEqual(mpu.read_register(self.MPUReg.MAIR0), 0x44BB00FF)
+        self.assertEqual(mpu.read_register(self.MPUReg.MAIR1), 0x00000044)
+
+        # Check individual attribute extraction
+        self.assertEqual(mpu.get_mair_attr(0), 0xFF)  # Attr0
+        self.assertEqual(mpu.get_mair_attr(1), 0x00)  # Attr1
+        self.assertEqual(mpu.get_mair_attr(2), 0xBB)  # Attr2
+        self.assertEqual(mpu.get_mair_attr(3), 0x44)  # Attr3
+        self.assertEqual(mpu.get_mair_attr(4), 0x44)  # Attr4
+        self.assertEqual(mpu.get_mair_attr(5), 0x00)  # Attr5
+
+    def test_v8m_mpu_mair_ignored_for_v7(self):
+        """MAIR reads return 0 for PMSAv7 MPU."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=False)
+        mpu.write_register(self.MPUReg.MAIR0, 0xDEADBEEF)
+        self.assertEqual(mpu.read_register(self.MPUReg.MAIR0), 0)
+
+    def test_v8m_mpu_alias_registers(self):
+        """Test v8M alias register programming (4 consecutive regions)."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+
+        # Select region 0 as base
+        mpu.write_register(self.MPUReg.RNR, 0)
+
+        # Program regions 0-3 via RBAR/RLAR + aliases
+        bases = [0x20000000, 0x20040000, 0x20080000, 0x200C0000]
+        limits = [0x2003FFE0, 0x2007FFE0, 0x200BFFE0, 0x200FFFE0]
+
+        mpu.write_register(self.MPUReg.RBAR, bases[0] | (0b01 << 1))
+        mpu.write_register(self.MPUReg.RLAR, limits[0] | 1)
+        mpu.write_register(self.MPUReg.RBAR_A1, bases[1] | (0b01 << 1))
+        mpu.write_register(self.MPUReg.RLAR_A1, limits[1] | 1)
+        mpu.write_register(self.MPUReg.RBAR_A2, bases[2] | (0b01 << 1))
+        mpu.write_register(self.MPUReg.RLAR_A2, limits[2] | 1)
+        mpu.write_register(self.MPUReg.RBAR_A3, bases[3] | (0b01 << 1))
+        mpu.write_register(self.MPUReg.RLAR_A3, limits[3] | 1)
+
+        for i in range(4):
+            self.assertEqual(mpu.regions[i].base, bases[i], f"region {i}")
+            self.assertEqual(mpu.regions[i].limit, limits[i], f"region {i}")
+            self.assertTrue(mpu.regions[i].enabled, f"region {i}")
+
+    def test_v8m_mpu_access_check(self):
+        """End-to-end access check with PMSAv8 MPU."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+        mpu.enabled = True
+
+        # Region 0: SRAM RW privileged only
+        mpu.write_register(self.MPUReg.RNR, 0)
+        mpu.write_register(self.MPUReg.RBAR, 0x20000000 | (0b00 << 1))  # AP=RW_PRIV
+        mpu.write_register(self.MPUReg.RLAR, 0x2003FFE0 | 1)
+
+        # Region 1: Flash RO any privilege
+        mpu.write_register(self.MPUReg.RNR, 1)
+        mpu.write_register(self.MPUReg.RBAR, 0x08000000 | (0b11 << 1))  # AP=RO_ANY
+        mpu.write_register(self.MPUReg.RLAR, 0x080FFFE0 | 1)
+
+        # SRAM: priv RW OK, unpriv fails
+        self.assertTrue(mpu.check_access(0x20001000, is_write=True, is_privileged=True))
+        self.assertFalse(mpu.check_access(0x20001000, is_write=True, is_privileged=False))
+
+        # Flash: any read OK, any write fails
+        self.assertTrue(mpu.check_access(0x08001000, is_write=False, is_privileged=True))
+        self.assertTrue(mpu.check_access(0x08001000, is_write=False, is_privileged=False))
+        self.assertFalse(mpu.check_access(0x08001000, is_write=True, is_privileged=True))
+
+        # Unmapped address: fault (no PRIVDEFENA)
+        self.assertFalse(mpu.check_access(0x40000000, is_privileged=True))
+
+    def test_v8m_mpu_privdefena(self):
+        """PRIVDEFENA allows privileged access to unmapped regions."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+        mpu.enabled = True
+        mpu.privdefena = True
+
+        # No regions configured
+        self.assertTrue(mpu.check_access(0x40000000, is_privileged=True))
+        self.assertFalse(mpu.check_access(0x40000000, is_privileged=False))
+
+    def test_v8m_shm_sync(self):
+        """Test SHM sync with PMSAv8 RBAR+RLAR format."""
+        from slab_cortex_m.shm_peripheral import ShmPeripheralBridge, ShmHeader
+
+        bridge = ShmPeripheralBridge.__new__(ShmPeripheralBridge)
+        bridge._shm = Mock()
+
+        # Build v8M MPU state
+        ctrl = (1 << self.MPUCtrlBits.ENABLE) | (1 << self.MPUCtrlBits.PRIVDEFENA)
+        # Region 0: RBAR=0x20000000|SH=3|AP=01|XN=0, RLAR=0x2003FFE0|AttrIndx=0|EN=1
+        rbar0 = 0x20000000 | (3 << 3) | (0b01 << 1) | 0
+        rlar0 = 0x2003FFE0 | (0 << 1) | 1
+        # Region 1: RBAR=0x08000000|SH=0|AP=11|XN=0, RLAR=0x080FFFE0|AttrIndx=1|EN=1
+        rbar1 = 0x08000000 | (0 << 3) | (0b11 << 1) | 0
+        rlar1 = 0x080FFFE0 | (1 << 1) | 1
+
+        data = struct.pack('<I', ctrl)
+        data += struct.pack('<II', rbar0, rlar0)
+        data += struct.pack('<II', rbar1, rlar1)
+        for _ in range(6):
+            data += struct.pack('<II', 0, 0)
+
+        full_buf = bytearray(1024)
+        full_buf[64:64+len(data)] = data
+        bridge._shm.buf = full_buf
+
+        # Sync with v8M MPU
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+        result = bridge.sync_mpu_from_shm(mpu)
+
+        self.assertIs(result, mpu)
+        self.assertTrue(mpu.enabled)
+        self.assertTrue(mpu.privdefena)
+
+        r0 = mpu.regions[0]
+        self.assertTrue(r0.enabled)
+        self.assertTrue(r0._v8m)
+        self.assertEqual(r0.base, 0x20000000)
+        self.assertEqual(r0.limit, 0x2003FFE0)
+        self.assertEqual(r0.sh, 3)
+        self.assertEqual(r0.ap, 0b01)
+
+        r1 = mpu.regions[1]
+        self.assertTrue(r1.enabled)
+        self.assertEqual(r1.base, 0x08000000)
+        self.assertEqual(r1.limit, 0x080FFFE0)
+        self.assertEqual(r1.ap, 0b11)
+        self.assertEqual(r1.attr_idx, 1)
+
+    def test_v8m_region_disabled(self):
+        """Disabled v8M regions don't match."""
+        r = self.MPURegion.from_rbar_rlar(
+            0,
+            0x20000000 | (0b01 << 1),
+            0x2003FFE0 | (0 << 1) | 0,  # EN=0
+        )
+        self.assertFalse(r.enabled)
+        self.assertFalse(r.contains(0x20001000))
+
+    def test_v8m_mpu_reset(self):
+        """Reset clears all v8M state including MAIR."""
+        mpu = self.CortexMPU(num_regions=8, arch_v8m=True)
+        mpu.enabled = True
+        mpu.mair = [0xDEADBEEF, 0xCAFEBABE]
+        mpu.write_register(self.MPUReg.RNR, 0)
+        mpu.write_register(self.MPUReg.RBAR, 0x20000000 | (0b01 << 1))
+        mpu.write_register(self.MPUReg.RLAR, 0x2003FFE0 | 1)
+
+        mpu.reset()
+        self.assertFalse(mpu.enabled)
+        self.assertEqual(mpu.mair, [0, 0])
+        self.assertFalse(mpu.regions[0].enabled)
+        self.assertEqual(mpu.regions[0].base, 0)
+        self.assertEqual(mpu.regions[0].limit, 0)
+
+
+# =============================================================================
 # GTZC ENFORCEMENT TESTS
 # =============================================================================
 

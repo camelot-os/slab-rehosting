@@ -15,6 +15,8 @@ Registers (at 0xE000ED90):
 - MPU_RASR  (0xE000EDA0): Region Attribute and Size Register (v7-M)
 - MPU_RLAR  (0xE000EDA0): Region Limit Address Register (v8-M)
 - MPU_RBAR_A1-A3 (0xE000EDA4-0xE000EDBC): Alias registers
+- MPU_MAIR0 (0xE000EDC0): Memory Attribute Indirection Register 0 (v8-M)
+- MPU_MAIR1 (0xE000EDC4): Memory Attribute Indirection Register 1 (v8-M)
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
 Copyright (C) 2026 Twisted Wires Security Lab
@@ -155,13 +157,20 @@ class MPUReg(IntEnum):
     RNR = 0x08    # MPU_RNR
     RBAR = 0x0C   # MPU_RBAR
     RASR = 0x10   # MPU_RASR (v7-M) / MPU_RLAR (v8-M)
+    RLAR = 0x10   # Alias for RASR offset (v8-M name)
     # Alias registers for bulk programming
     RBAR_A1 = 0x14
     RASR_A1 = 0x18
+    RLAR_A1 = 0x18  # v8-M name
     RBAR_A2 = 0x1C
     RASR_A2 = 0x20
+    RLAR_A2 = 0x20  # v8-M name
     RBAR_A3 = 0x24
     RASR_A3 = 0x28
+    RLAR_A3 = 0x28  # v8-M name
+    # PMSAv8 memory attribute indirection registers
+    MAIR0 = 0x30  # MPU_MAIR0 (v8-M only)
+    MAIR1 = 0x34  # MPU_MAIR1 (v8-M only)
 
 
 class MPUCtrlBits(IntEnum):
@@ -172,7 +181,7 @@ class MPUCtrlBits(IntEnum):
 
 
 class AccessPermission(IntEnum):
-    """ARMv7-M MPU access permissions (AP field)."""
+    """ARMv7-M MPU access permissions (3-bit AP field in RASR)."""
     NO_ACCESS = 0b000      # All accesses fault
     PRIV_RW = 0b001        # Privileged RW, Unprivileged No Access
     PRIV_RW_UNPRIV_RO = 0b010  # Privileged RW, Unprivileged RO
@@ -181,6 +190,17 @@ class AccessPermission(IntEnum):
     PRIV_RO = 0b101        # Privileged RO, Unprivileged No Access
     RO = 0b110             # Read-only for all
     RO_RO = 0b111          # Read-only for all (alias)
+
+
+class AccessPermissionV8(IntEnum):
+    """ARMv8-M MPU access permissions (2-bit AP field in RBAR).
+
+    Bit layout: AP[1]=RO, AP[0]=NP (non-privileged).
+    """
+    RW_PRIV = 0b00    # Read/Write, privileged only
+    RW_ANY = 0b01     # Read/Write, any privilege level
+    RO_PRIV = 0b10    # Read-Only, privileged only
+    RO_ANY = 0b11     # Read-Only, any privilege level
 
 
 class MemFaultType(IntEnum):
@@ -202,36 +222,43 @@ class MPURegion:
     MPU region configuration.
 
     ARMv7-M style: base + size (power-of-2, minimum 32 bytes)
-    ARMv8-M style: base + limit (32-byte aligned)
+    ARMv8-M style: base + limit (32-byte aligned, inclusive end)
     """
     index: int = 0
     enabled: bool = False
 
-    # ARMv7-M: base address (aligned to size)
+    # Base address (both v7 and v8)
     base: int = 0
 
     # ARMv7-M: region size as power-of-2 encoding (4 = 32 bytes, 31 = 4GB)
     size_exp: int = 0  # actual size = 2^(size_exp + 1)
 
-    # ARMv8-M: limit address (inclusive)
+    # ARMv8-M: limit address (inclusive, bits[4:0] are 0x1F)
     limit: int = 0
 
-    # Access permissions
-    ap: int = AccessPermission.NO_ACCESS
+    # Access permissions (v7: 3-bit AP, v8: 2-bit AP)
+    ap: int = 0
     xn: bool = False  # Execute Never
 
-    # Memory attributes
+    # ARMv7-M memory attributes
     tex: int = 0       # Type Extension
     shareable: bool = False
     cacheable: bool = False
     bufferable: bool = False
 
+    # ARMv8-M memory attributes
+    sh: int = 0        # Shareability (2-bit: 0=non, 2=outer, 3=inner)
+    attr_idx: int = 0  # MAIR attribute index (0-7)
+
     # Subregion disable (ARMv7-M only, 8 subregions)
     srd: int = 0  # Bit mask: 1 = subregion disabled
 
+    # Architecture flag (set by from_rbar_rlar)
+    _v8m: bool = False
+
     @property
     def size(self) -> int:
-        """Get region size in bytes."""
+        """Get region size in bytes (v7-M)."""
         if self.size_exp < 4:
             return 0  # Minimum is 32 bytes (exp=4)
         return 1 << (self.size_exp + 1)
@@ -239,17 +266,24 @@ class MPURegion:
     @property
     def end(self) -> int:
         """Get region end address (exclusive)."""
+        if self._v8m:
+            return (self.limit | 0x1F) + 1
         return self.base + self.size
 
     def contains(self, address: int) -> bool:
-        """Check if address is in this region (considering subregions)."""
+        """Check if address is in this region (considering subregions for v7)."""
         if not self.enabled:
             return False
 
+        if self._v8m:
+            # PMSAv8: limit-based (inclusive end, bits[4:0] = 0x1F)
+            region_end = self.limit | 0x1F
+            return self.base <= address <= region_end
+
+        # PMSAv7: size-based with optional subregion disable
         if address < self.base or address >= self.end:
             return False
 
-        # Check subregion disable
         if self.srd and self.size >= 256:  # SRD only for regions >= 256 bytes
             subregion_size = self.size // 8
             subregion_idx = (address - self.base) // subregion_size
@@ -265,11 +299,16 @@ class MPURegion:
 
         Returns True if access is allowed, False if it should fault.
         """
-        # Execute Never check
         if is_instruction and self.xn:
             return False
 
-        # AP field permission check
+        if self._v8m:
+            return self._check_permission_v8(is_write, is_privileged)
+
+        return self._check_permission_v7(is_write, is_privileged)
+
+    def _check_permission_v7(self, is_write: bool, is_privileged: bool) -> bool:
+        """PMSAv7 3-bit AP permission check."""
         if self.ap == AccessPermission.NO_ACCESS:
             return False
         elif self.ap == AccessPermission.PRIV_RW:
@@ -286,8 +325,21 @@ class MPURegion:
             return is_privileged
         elif self.ap in (AccessPermission.RO, AccessPermission.RO_RO):
             return not is_write
-
         return False
+
+    def _check_permission_v8(self, is_write: bool, is_privileged: bool) -> bool:
+        """PMSAv8 2-bit AP permission check.
+
+        AP[1]=RO flag, AP[0]=NP (non-privileged) flag.
+        """
+        ro = bool(self.ap & 0b10)
+        np = bool(self.ap & 0b01)
+
+        if ro and is_write:
+            return False
+        if not np and not is_privileged:
+            return False
+        return True
 
     def to_rasr(self) -> int:
         """Encode as ARMv7-M RASR register value."""
@@ -304,6 +356,22 @@ class MPURegion:
         rasr |= (1 if self.xn else 0) << 28  # XN
         return rasr
 
+    def to_rbar_v8(self) -> int:
+        """Encode as PMSAv8 RBAR register value."""
+        rbar = self.base & 0xFFFFFFE0   # BASE [31:5]
+        rbar |= (self.sh & 0x3) << 3    # SH [4:3]
+        rbar |= (self.ap & 0x3) << 1    # AP [2:1]
+        rbar |= (1 if self.xn else 0)   # XN [0]
+        return rbar
+
+    def to_rlar_v8(self) -> int:
+        """Encode as PMSAv8 RLAR register value."""
+        rlar = self.limit & 0xFFFFFFE0       # LIMIT [31:5]
+        rlar |= (self.attr_idx & 0x7) << 1   # AttrIndx [3:1]
+        if self.enabled:
+            rlar |= 1                        # EN [0]
+        return rlar
+
     @classmethod
     def from_rasr(cls, index: int, base: int, rasr: int) -> 'MPURegion':
         """Decode from ARMv7-M RBAR + RASR register values."""
@@ -319,6 +387,26 @@ class MPURegion:
             tex=(rasr >> 19) & 0x07,
             ap=(rasr >> 24) & 0x07,
             xn=bool((rasr >> 28) & 1),
+            _v8m=False,
+        )
+
+    @classmethod
+    def from_rbar_rlar(cls, index: int, rbar: int, rlar: int) -> 'MPURegion':
+        """Decode from PMSAv8 RBAR + RLAR register values.
+
+        RBAR: [31:5] BASE | [4:3] SH | [2:1] AP | [0] XN
+        RLAR: [31:5] LIMIT | [3:1] AttrIndx | [0] EN
+        """
+        return cls(
+            index=index,
+            enabled=bool(rlar & 1),       # EN [0]
+            base=rbar & 0xFFFFFFE0,        # BASE [31:5]
+            limit=rlar & 0xFFFFFFE0,       # LIMIT [31:5]
+            sh=(rbar >> 3) & 0x3,          # SH [4:3]
+            ap=(rbar >> 1) & 0x3,          # AP [2:1]
+            xn=bool(rbar & 1),             # XN [0]
+            attr_idx=(rlar >> 1) & 0x7,    # AttrIndx [3:1]
+            _v8m=True,
         )
 
 
@@ -429,28 +517,28 @@ class CortexMPU(MemoryProtectionController):
     """
     Cortex-M Memory Protection Unit.
 
-    Implements the ARMv7-M MPU with:
-    - 8 configurable regions (higher index = higher priority)
-    - Subregion disable
-    - Background region (default memory map) for privileged access
-    - MemManage fault generation on violations
-    - Memory aliasing support
-    - Override mode for Python-side enforcement
+    Implements both ARMv7-M (PMSAv7) and ARMv8-M (PMSAv8) MPU:
 
-    Usage:
+    PMSAv7 (arch_v8m=False): Cortex-M3/M4/M7
+    - 8 regions, size = power-of-2, subregion disable
+    - RBAR has VALID+REGION bits, RASR has size/attrs/AP
+
+    PMSAv8 (arch_v8m=True): Cortex-M23/M33/M55/M85
+    - 4-16 regions, limit-based (no power-of-2 constraint)
+    - RBAR has BASE/SH/AP/XN, RLAR has LIMIT/AttrIndx/EN
+    - MAIR0/MAIR1 for memory attribute indirection
+
+    Usage (v7-M):
         mpu = CortexMPU(num_regions=8)
+        mpu.write_register(MPUReg.RNR, 0)
+        mpu.write_register(MPUReg.RBAR, 0x20000000)
+        mpu.write_register(MPUReg.RASR, 0x0300001F)
 
-        # Configure a region
-        mpu.write_register(MPUReg.RNR, 0)           # Select region 0
-        mpu.write_register(MPUReg.RBAR, 0x20000000) # Base = SRAM
-        mpu.write_register(MPUReg.RASR, 0x0300001F) # Full RW, 4GB
-
-        # Enable MPU + override mode
-        mpu.write_register(MPUReg.CTRL, 0x05)  # ENABLE + PRIVDEFENA
-        mpu.enable_override()  # Enforce on peripheral bridge
-
-        # Check access
-        allowed = mpu.check_access(0x20001000, is_write=True, is_privileged=True)
+    Usage (v8-M):
+        mpu = CortexMPU(num_regions=8, arch_v8m=True)
+        mpu.write_register(MPUReg.RNR, 0)
+        mpu.write_register(MPUReg.RBAR, 0x20000000 | (3 << 3) | (1 << 1))
+        mpu.write_register(MPUReg.RLAR, 0x2003FFE0 | (0 << 1) | 1)
     """
 
     MPU_BASE = 0xE000ED90
@@ -460,8 +548,8 @@ class CortexMPU(MemoryProtectionController):
         Initialize MPU.
 
         Args:
-            num_regions: Number of MPU regions (4, 8, or 16)
-            arch_v8m: Use ARMv8-M style (limit-based) instead of v7-M
+            num_regions: Number of MPU regions (4, 8, 12, or 16)
+            arch_v8m: Use ARMv8-M style (PMSAv8) instead of v7-M (PMSAv7)
         """
         super().__init__()
         self.num_regions = num_regions
@@ -469,7 +557,7 @@ class CortexMPU(MemoryProtectionController):
 
         # Regions (higher index = higher priority)
         self.regions: List[MPURegion] = [
-            MPURegion(index=i) for i in range(num_regions)
+            MPURegion(index=i, _v8m=arch_v8m) for i in range(num_regions)
         ]
 
         # Control register state
@@ -479,6 +567,9 @@ class CortexMPU(MemoryProtectionController):
 
         # Currently selected region
         self._rnr = 0
+
+        # PMSAv8: Memory Attribute Indirection Registers (8 attrs x 8 bits)
+        self.mair = [0, 0]  # MAIR0, MAIR1
 
         # Memory aliases
         self.aliases = MemoryAliasController()
@@ -494,13 +585,17 @@ class CortexMPU(MemoryProtectionController):
         self.hfnmiena = False
         self.privdefena = False
         self._rnr = 0
+        self.mair = [0, 0]
         for r in self.regions:
             r.enabled = False
             r.base = 0
+            r.limit = 0
             r.size_exp = 0
-            r.ap = AccessPermission.NO_ACCESS
+            r.ap = 0
             r.xn = False
             r.srd = 0
+            r.sh = 0
+            r.attr_idx = 0
         self._fault_log.clear()
         self.access_checks = 0
         self.faults_generated = 0
@@ -521,7 +616,6 @@ class CortexMPU(MemoryProtectionController):
     def read_register(self, offset: int) -> int:
         """Read MPU register (offset from MPU_BASE)."""
         if offset == MPUReg.TYPE:
-            # MPU_TYPE: DREGION = num_regions, IREGION = 0, SEPARATE = 0
             return (self.num_regions << 8)
 
         elif offset == MPUReg.CTRL:
@@ -538,29 +632,49 @@ class CortexMPU(MemoryProtectionController):
             return self._rnr
 
         elif offset == MPUReg.RBAR:
-            if self._rnr < self.num_regions:
-                r = self.regions[self._rnr]
-                return r.base | (1 << 4) | (self._rnr & 0x0F)  # VALID + REGION
-            return 0
+            return self._read_rbar(self._rnr)
 
-        elif offset == MPUReg.RASR:
-            if self._rnr < self.num_regions:
-                return self.regions[self._rnr].to_rasr()
-            return 0
+        elif offset == MPUReg.RASR:  # RASR (v7) or RLAR (v8)
+            return self._read_rasr_rlar(self._rnr)
 
-        # Alias registers
+        # Alias registers: access RNR+1, RNR+2, RNR+3
         elif offset in (MPUReg.RBAR_A1, MPUReg.RBAR_A2, MPUReg.RBAR_A3):
             alias_idx = (offset - MPUReg.RBAR_A1) // 8 + 1
             region_idx = (self._rnr + alias_idx) % self.num_regions
-            r = self.regions[region_idx]
-            return r.base | (1 << 4) | (region_idx & 0x0F)
+            return self._read_rbar(region_idx)
 
         elif offset in (MPUReg.RASR_A1, MPUReg.RASR_A2, MPUReg.RASR_A3):
             alias_idx = (offset - MPUReg.RASR_A1) // 8 + 1
             region_idx = (self._rnr + alias_idx) % self.num_regions
-            return self.regions[region_idx].to_rasr()
+            return self._read_rasr_rlar(region_idx)
+
+        elif offset == MPUReg.MAIR0:
+            return self.mair[0] if self.arch_v8m else 0
+
+        elif offset == MPUReg.MAIR1:
+            return self.mair[1] if self.arch_v8m else 0
 
         return 0
+
+    def _read_rbar(self, region_idx: int) -> int:
+        """Read RBAR for a given region."""
+        if region_idx >= self.num_regions:
+            return 0
+        r = self.regions[region_idx]
+        if self.arch_v8m:
+            return r.to_rbar_v8()
+        else:
+            return r.base | (1 << 4) | (region_idx & 0x0F)  # VALID + REGION
+
+    def _read_rasr_rlar(self, region_idx: int) -> int:
+        """Read RASR (v7) or RLAR (v8) for a given region."""
+        if region_idx >= self.num_regions:
+            return 0
+        r = self.regions[region_idx]
+        if self.arch_v8m:
+            return r.to_rlar_v8()
+        else:
+            return r.to_rasr()
 
     def write_register(self, offset: int, value: int):
         """Write MPU register (offset from MPU_BASE)."""
@@ -575,49 +689,89 @@ class CortexMPU(MemoryProtectionController):
                 self._rnr = 0
 
         elif offset == MPUReg.RBAR:
-            # RBAR write: if VALID bit set, update REGION field too
-            if value & (1 << 4):  # VALID bit
-                self._rnr = value & 0x0F
-            if self._rnr < self.num_regions:
-                self.regions[self._rnr].base = value & 0xFFFFFFE0
+            self._write_rbar(value, self._rnr)
 
-        elif offset == MPUReg.RASR:
-            if self._rnr < self.num_regions:
-                r = self.regions[self._rnr]
-                r.enabled = bool(value & 1)
-                r.size_exp = (value >> 1) & 0x1F
-                r.srd = (value >> 8) & 0xFF
-                r.bufferable = bool((value >> 16) & 1)
-                r.cacheable = bool((value >> 17) & 1)
-                r.shareable = bool((value >> 18) & 1)
-                r.tex = (value >> 19) & 0x07
-                r.ap = (value >> 24) & 0x07
-                r.xn = bool((value >> 28) & 1)
+        elif offset == MPUReg.RASR:  # RASR (v7) or RLAR (v8)
+            self._write_rasr_rlar(value, self._rnr)
 
         # Alias registers for bulk programming
         elif offset in (MPUReg.RBAR_A1, MPUReg.RBAR_A2, MPUReg.RBAR_A3):
             alias_idx = (offset - MPUReg.RBAR_A1) // 8 + 1
-            if value & (1 << 4):  # VALID
-                region_idx = value & 0x0F
-            else:
+            if self.arch_v8m:
+                # v8M: alias always accesses RNR + alias_idx
                 region_idx = (self._rnr + alias_idx) % self.num_regions
-            if region_idx < self.num_regions:
-                self.regions[region_idx].base = value & 0xFFFFFFE0
+            else:
+                # v7M: VALID bit can override target region
+                if value & (1 << 4):
+                    region_idx = value & 0x0F
+                else:
+                    region_idx = (self._rnr + alias_idx) % self.num_regions
+            self._write_rbar(value, region_idx)
 
         elif offset in (MPUReg.RASR_A1, MPUReg.RASR_A2, MPUReg.RASR_A3):
             alias_idx = (offset - MPUReg.RASR_A1) // 8 + 1
             region_idx = (self._rnr + alias_idx) % self.num_regions
+            self._write_rasr_rlar(value, region_idx)
+
+        elif offset == MPUReg.MAIR0:
+            if self.arch_v8m:
+                self.mair[0] = value & 0xFFFFFFFF
+
+        elif offset == MPUReg.MAIR1:
+            if self.arch_v8m:
+                self.mair[1] = value & 0xFFFFFFFF
+
+    def _write_rbar(self, value: int, default_region: int):
+        """Write RBAR for v7 or v8."""
+        if self.arch_v8m:
+            # PMSAv8: RBAR = BASE[31:5] | SH[4:3] | AP[2:1] | XN[0]
+            region_idx = default_region
             if region_idx < self.num_regions:
                 r = self.regions[region_idx]
-                r.enabled = bool(value & 1)
-                r.size_exp = (value >> 1) & 0x1F
-                r.srd = (value >> 8) & 0xFF
-                r.bufferable = bool((value >> 16) & 1)
-                r.cacheable = bool((value >> 17) & 1)
-                r.shareable = bool((value >> 18) & 1)
-                r.tex = (value >> 19) & 0x07
-                r.ap = (value >> 24) & 0x07
-                r.xn = bool((value >> 28) & 1)
+                r.base = value & 0xFFFFFFE0
+                r.sh = (value >> 3) & 0x3
+                r.ap = (value >> 1) & 0x3
+                r.xn = bool(value & 1)
+                r._v8m = True
+        else:
+            # PMSAv7: RBAR = BASE[31:5] | VALID[4] | REGION[3:0]
+            if value & (1 << 4):  # VALID bit
+                self._rnr = value & 0x0F
+                default_region = self._rnr
+            if default_region < self.num_regions:
+                self.regions[default_region].base = value & 0xFFFFFFE0
+
+    def _write_rasr_rlar(self, value: int, region_idx: int):
+        """Write RASR (v7) or RLAR (v8) for a given region."""
+        if region_idx >= self.num_regions:
+            return
+        r = self.regions[region_idx]
+
+        if self.arch_v8m:
+            # PMSAv8 RLAR: LIMIT[31:5] | AttrIndx[3:1] | EN[0]
+            r.limit = value & 0xFFFFFFE0
+            r.attr_idx = (value >> 1) & 0x7
+            r.enabled = bool(value & 1)
+            r._v8m = True
+        else:
+            # PMSAv7 RASR
+            r.enabled = bool(value & 1)
+            r.size_exp = (value >> 1) & 0x1F
+            r.srd = (value >> 8) & 0xFF
+            r.bufferable = bool((value >> 16) & 1)
+            r.cacheable = bool((value >> 17) & 1)
+            r.shareable = bool((value >> 18) & 1)
+            r.tex = (value >> 19) & 0x07
+            r.ap = (value >> 24) & 0x07
+            r.xn = bool((value >> 28) & 1)
+
+    def get_mair_attr(self, idx: int) -> int:
+        """Get memory attribute by index (0-7) from MAIR0/MAIR1."""
+        reg = idx // 4
+        pos = (idx % 4) * 8
+        if reg < 2:
+            return (self.mair[reg] >> pos) & 0xFF
+        return 0
 
     # =========================================================================
     # Access Checking

@@ -480,10 +480,15 @@ class ShmPeripheralBridge:
         """
         Read MPU state from SHM data region (written by QEMU C-side).
 
-        The C-side slab_proxy_sync_mpu_state() writes the CPU's PMSAv7
-        MPU registers into SHM at offset 64:
+        The C-side slab_proxy_sync_mpu_state() writes the CPU's MPU
+        registers into SHM at offset 64:
           [0:4]   MPU_CTRL
-          [4:68]  8 regions × {RBAR(4), RASR(4)}
+          [4:68]  8 regions × {RBAR(4), RASR/RLAR(4)}
+
+        PMSAv7 (M3/M4/M7): RBAR + RASR pairs
+        PMSAv8 (M23/M33/M55): RBAR + RLAR pairs
+
+        The format is auto-detected from mpu.arch_v8m.
 
         Args:
             mpu: Existing CortexMPU to update, or None to create new.
@@ -513,11 +518,14 @@ class ShmPeripheralBridge:
         mpu.hfnmiena = bool(ctrl & (1 << MPUCtrlBits.HFNMIENA))
         mpu.privdefena = bool(ctrl & (1 << MPUCtrlBits.PRIVDEFENA))
 
-        # Update regions from RBAR + RASR pairs
+        # Update regions from RBAR + RASR/RLAR pairs
         for i in range(min(MPU_MAX_REGIONS, mpu.num_regions)):
             offset = 4 + i * 8
-            rbar, rasr = struct.unpack('<II', raw[offset:offset + 8])
-            mpu.regions[i] = MPURegion.from_rasr(i, rbar, rasr)
+            rbar, second = struct.unpack('<II', raw[offset:offset + 8])
+            if mpu.arch_v8m:
+                mpu.regions[i] = MPURegion.from_rbar_rlar(i, rbar, second)
+            else:
+                mpu.regions[i] = MPURegion.from_rasr(i, rbar, second)
 
         return mpu
 
