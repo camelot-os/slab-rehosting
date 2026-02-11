@@ -263,7 +263,7 @@ Start QEMU:
 .. code-block:: bash
 
    ./build/qemu-system-arm \
-       -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5555 \
+       -M slab-cortex-m,cpu-type=cortex-m4,tcp-port=5000 \
        -kernel firmware.bin \
        -nographic
 
