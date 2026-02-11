@@ -91,6 +91,11 @@ struct ARMv7MState {
     MemoryRegion sysreg_ns_mem;
     /* MR providing default PPB behaviour */
     MemoryRegion defaultmem;
+    /* DWT (Data Watchpoint and Trace) register space */
+    MemoryRegion dwtmem;
+    uint32_t dwt_ctrl;         /* DWT_CTRL (bit 0 = CYCCNTENA) */
+    uint32_t dwt_cyccnt_base;  /* CYCCNT value at last write/enable */
+    int64_t  dwt_cyccnt_ns;    /* QEMU_CLOCK_VIRTUAL ns at last write */
 
     Clock *refclk;
     Clock *cpuclk;

@@ -25,6 +25,7 @@
 #include "target/arm/cpu-features.h"
 #include "target/arm/cpu-qom.h"
 #include "migration/vmstate.h"
+#include "qemu/timer.h"
 
 /* Bitbanded IO.  Each word corresponds to a single bit.  */
 
@@ -246,6 +247,79 @@ static const MemoryRegionOps ppb_default_ops = {
     .valid.max_access_size = 8,
 };
 
+/* --- DWT Cycle Counter ------------------------------------------------- */
+
+static uint32_t armv7m_dwt_cyccnt(ARMv7MState *s)
+{
+    /* TRCENA (DEMCR bit 24) must be set and CYCCNTENA (DWT_CTRL bit 0) */
+    if (!(s->nvic.demcr & (1 << 24)) || !(s->dwt_ctrl & 1)) {
+        return s->dwt_cyccnt_base;
+    }
+    int64_t now = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+    int64_t elapsed = now - s->dwt_cyccnt_ns;
+    if (elapsed < 0) {
+        elapsed = 0;
+    }
+    return s->dwt_cyccnt_base + (uint32_t)clock_ns_to_ticks(s->cpuclk, elapsed);
+}
+
+static MemTxResult dwt_read(void *opaque, hwaddr addr,
+                            uint64_t *data, unsigned size, MemTxAttrs attrs)
+{
+    ARMv7MState *s = opaque;
+
+    switch (addr) {
+    case 0x000: /* DWT_CTRL */
+        *data = s->dwt_ctrl;
+        break;
+    case 0x004: /* DWT_CYCCNT */
+        *data = armv7m_dwt_cyccnt(s);
+        break;
+    default:
+        *data = 0;
+        break;
+    }
+    return MEMTX_OK;
+}
+
+static MemTxResult dwt_write(void *opaque, hwaddr addr,
+                             uint64_t value, unsigned size, MemTxAttrs attrs)
+{
+    ARMv7MState *s = opaque;
+
+    switch (addr) {
+    case 0x000: /* DWT_CTRL */
+    {
+        bool was_enabled = (s->nvic.demcr & (1 << 24)) && (s->dwt_ctrl & 1);
+        bool now_enabled = (s->nvic.demcr & (1 << 24)) && (value & 1);
+        if (!was_enabled && now_enabled) {
+            /* Snapshot current time when enabling */
+            s->dwt_cyccnt_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        } else if (was_enabled && !now_enabled) {
+            /* Freeze: latch the current count */
+            s->dwt_cyccnt_base = armv7m_dwt_cyccnt(s);
+        }
+        s->dwt_ctrl = value & 0x1; /* Only CYCCNTENA is writable for now */
+        break;
+    }
+    case 0x004: /* DWT_CYCCNT */
+        s->dwt_cyccnt_base = (uint32_t)value;
+        s->dwt_cyccnt_ns = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
+        break;
+    default:
+        break;
+    }
+    return MEMTX_OK;
+}
+
+static const MemoryRegionOps dwt_ops = {
+    .read_with_attrs = dwt_read,
+    .write_with_attrs = dwt_write,
+    .endianness = DEVICE_LITTLE_ENDIAN,
+    .valid.min_access_size = 4,
+    .valid.max_access_size = 4,
+};
+
 static void armv7m_instance_init(Object *obj)
 {
     ARMv7MState *s = ARMV7M(obj);
@@ -428,6 +502,12 @@ static void armv7m_realize(DeviceState *dev, Error **errp)
                           "nvic-default", 0x100000);
     memory_region_add_subregion_overlap(&s->container, 0xe0000000,
                                         &s->defaultmem, -1);
+
+    /* DWT (Data Watchpoint and Trace) at 0xE0001000 */
+    memory_region_init_io(&s->dwtmem, OBJECT(s), &dwt_ops, s,
+                          "armv7m-dwt", 0x1000);
+    memory_region_add_subregion_overlap(&s->container, 0xe0001000,
+                                        &s->dwtmem, 0);
 
     /* Wire the NVIC up to the CPU */
     sbd = SYS_BUS_DEVICE(&s->nvic);
