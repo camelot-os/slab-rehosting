@@ -131,6 +131,13 @@ from .rp2040_server import (
     RP2350_RISCV_CONFIG,
 )
 
+from .pico_server import (
+    PicoBoardServer,
+    PicoBootMode,
+    stage2_crc_valid,
+    load_flash_from_file,
+)
+
 try:
     from .rp2350_timing import (
         RP2350Timing,
@@ -237,6 +244,11 @@ __all__ = [
     "RP2040_CONFIG",
     "RP2350_ARM_CONFIG",
     "RP2350_RISCV_CONFIG",
+    # Pico Board
+    "PicoBoardServer",
+    "PicoBootMode",
+    "stage2_crc_valid",
+    "load_flash_from_file",
     # RP2350 Timing
     "RP2350Timing",
     "CortexM33Timing",
