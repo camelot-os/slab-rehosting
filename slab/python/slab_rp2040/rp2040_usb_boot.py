@@ -138,6 +138,7 @@ class RP2040BootromFAT:
         self.arch = arch
         self.flash_data: Dict[int, bytes] = {}  # addr -> data
         self.flash_callback: Optional[Callable[[int, bytes], None]] = None
+        self.on_upload_complete: Optional[Callable[[], None]] = None
         self.log = logging.getLogger('RP2040.FAT')
 
         # Build static filesystem
@@ -326,6 +327,12 @@ Family: 0x{family_id:08X}
         # Call flash callback if set
         if self.flash_callback:
             self.flash_callback(addr, payload)
+
+        # Detect upload completion (last block received)
+        if block.num_blocks > 0 and block.block_no == block.num_blocks - 1:
+            self.log.info(f"UF2 upload complete: {block.num_blocks} blocks")
+            if self.on_upload_complete:
+                self.on_upload_complete()
 
         return True
 
@@ -668,6 +675,10 @@ class RP2040BootromUSB:
     def set_flash_callback(self, callback: Callable[[int, bytes], None]):
         """Set callback for flash programming."""
         self.fat.flash_callback = callback
+
+    def set_upload_complete_callback(self, callback: Callable[[], None]):
+        """Set callback for UF2 upload completion (all blocks received)."""
+        self.fat.on_upload_complete = callback
 
 
 # =============================================================================
