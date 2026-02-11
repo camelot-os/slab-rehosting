@@ -1,0 +1,13 @@
+name: STM32U5A5_Sentry_Autotest
+mcu: STM32U5A5
+clock: 160000000
+
+external_devices:
+  - type: LED
+    bus: GPIOC
+    params: {pin: 7, color: green}
+
+# U5A5: 4MB flash, 2496KB SRAM (SRAM1+2+3+5 contiguous)
+qemu_extra:
+  sram-size: "0x270000"
+  flash-size: "0x400000"

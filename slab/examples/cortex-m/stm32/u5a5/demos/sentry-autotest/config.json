@@ -1,0 +1,18 @@
+{
+    "name": "STM32U5A5",
+    "peripherals": [
+        {"name": "RCC", "type": "rcc", "base": 0x40023800, "size": 0x400},
+        {"name": "PWR", "type": "pwr", "base": 0x40007000, "size": 0x400},
+        {"name": "FLASH", "type": "flash", "base": 0x40023C00, "size": 0x400},
+        {"name": "GPIOA", "type": "gpio", "base": 0x40020000, "size": 0x400},
+        {"name": "GPIOB", "type": "gpio", "base": 0x40020400, "size": 0x400},
+        {"name": "GPIOC", "type": "gpio", "base": 0x40020800, "size": 0x400},
+        {"name": "GPIOD", "type": "gpio", "base": 0x40020C00, "size": 0x400},
+        {"name": "USART1", "type": "usart", "base": 0x40011000, "size": 0x400, "irq": 37},
+        {"name": "USART2", "type": "usart", "base": 0x40004400, "size": 0x400, "irq": 38},
+        {"name": "SPI1", "type": "spi", "base": 0x40013000, "size": 0x400, "irq": 35},
+        {"name": "TIM2", "type": "timer", "base": 0x40000000, "size": 0x400, "irq": 28},
+        {"name": "TIM3", "type": "timer", "base": 0x40000400, "size": 0x400, "irq": 29},
+        {"name": "USB_OTG_FS", "type": "usb_otg", "base": 0x50000000, "size": 0x40000, "irq": 67}
+    ]
+}

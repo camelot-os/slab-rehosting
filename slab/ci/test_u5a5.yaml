@@ -1,0 +1,16 @@
+# CI Test: STM32WB55 USB CDC Blinky
+#
+# Tests the WB55 CDC blinky demo with PMA-based USB FS controller.
+# This validates the STM32WB peripheral set and USB device initialization.
+#
+# Board: STM32WB55 with 3 LEDs on GPIOB (pins 0, 1, 5), USB FS PMA
+# Firmware: CDC ACM virtual serial port with LED control
+scenarios:
+  - name: "STM32U5A5 Sentry"
+    board: slab/boards/stm32u5a5_sentry_autotest.yaml
+    firmware: slab/examples/cortex-m/stm32/u5a5/demos/sentry-autotest/firmware.bin
+    timeout: 26
+    assertions:
+      - type: no_crash
+      - type: mmio_count
+        params: {min: 100}
