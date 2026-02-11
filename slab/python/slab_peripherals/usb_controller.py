@@ -20,7 +20,7 @@ import struct
 from abc import ABC, abstractmethod
 from enum import IntEnum, auto
 from dataclasses import dataclass, field
-from typing import Dict, List, Set, Tuple, Optional, Callable, Any
+from typing import Dict, List, Set, Tuple, Optional, Callable, Any, Protocol, runtime_checkable
 from collections import defaultdict
 import logging
 
@@ -734,6 +734,85 @@ class EndpointState:
         self.pkt_cnt = 0
         self.dma_addr = 0
         self.dpid = 0
+
+
+# =============================================================================
+# USB Device Protocol (USBIP Inject Interface)
+# =============================================================================
+
+@runtime_checkable
+class USBDeviceProtocol(Protocol):
+    """Interface required by USBIPServer.set_usb_peripheral().
+
+    Any USB controller peripheral that implements these methods can be used
+    with the USBIP firmware-in-the-loop bridge.  The USBIP server discovers
+    peripherals by duck typing (``hasattr(p, 'inject_setup_packet')``), but
+    this Protocol formalises the contract for documentation and static analysis.
+
+    Three existing implementations:
+    - ``USBCDCPeripheral`` (DWC2 OTG — STM32F4, H5, U5)
+    - ``STM32USBDevice`` (PMA USB FS — STM32F1, WB55)
+    - ``RP2040USB`` (RP2040 DPRAM-based USB)
+
+    See the *Adding USB/USBIP Support* tutorial for a porting guide.
+    """
+
+    def inject_vbus(self, connected: bool) -> None:
+        """Simulate USB cable plug (True) or unplug (False).
+
+        Set VBUS-detect status bits and fire session-request interrupt.
+        """
+        ...
+
+    def inject_usbrst(self) -> None:
+        """Inject a USB bus reset.
+
+        Set the reset interrupt flag and clear the device address.
+        """
+        ...
+
+    def inject_enumdne(self) -> None:
+        """Signal enumeration done.
+
+        Set the device speed in the status register.  No-op for controllers
+        that have no explicit enumeration-done event (PMA USB, RP2040).
+        """
+        ...
+
+    def inject_setup_packet(self, setup_data: bytes) -> None:
+        """Inject an 8-byte SETUP packet into EP0.
+
+        Write the data to the controller's receive buffer (FIFO, PMA, or
+        DPRAM) and set the appropriate SETUP interrupt flag so that the
+        firmware's ISR processes the packet.
+        """
+        ...
+
+    async def wait_ep0_response(self, timeout: float = 5.0) -> bytes:
+        """Wait for firmware to prepare an EP0 IN response.
+
+        Creates an internal ``asyncio.Event`` and returns the response bytes
+        once the firmware has filled the EP0 IN buffer.  Times out after
+        *timeout* seconds and returns ``b''``.
+        """
+        ...
+
+    def inject_out_data(self, ep: int, data: bytes) -> None:
+        """Inject OUT data (or a zero-length packet) into an endpoint.
+
+        Write the data to the endpoint buffer and set transfer-complete
+        flags so the firmware's ISR processes the received data.
+        """
+        ...
+
+    def is_ready(self) -> bool:
+        """Check whether the firmware has initialised USB.
+
+        Returns ``True`` when clocks are enabled, interrupts are configured,
+        and the controller is not in reset.  Optional but recommended —
+        the USBIP server uses ``hasattr()`` to check for this method.
+        """
+        ...
 
 
 # =============================================================================

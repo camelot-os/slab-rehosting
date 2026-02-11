@@ -348,12 +348,13 @@ class USBIPServer:
         self.usb_peripheral = None
         self.log = logging.getLogger('USBIP')
 
-    def set_usb_peripheral(self, peripheral):
+    def set_usb_peripheral(self, peripheral: 'USBDeviceProtocol'):
         """Link to USB peripheral for firmware-in-the-loop injection.
 
-        The peripheral must implement: inject_vbus(), inject_usbrst(),
-        inject_enumdne(), inject_setup_packet(), wait_ep0_response(),
-        inject_out_data().
+        The peripheral must implement the ``USBDeviceProtocol`` interface
+        (see ``slab_peripherals.usb_controller``): inject_vbus(),
+        inject_usbrst(), inject_enumdne(), inject_setup_packet(),
+        wait_ep0_response(), inject_out_data(), and optionally is_ready().
 
         Compatible with DWC2 OTG, PMA USB FS, and RP2040 USB controllers.
         """
