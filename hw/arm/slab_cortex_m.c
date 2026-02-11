@@ -72,6 +72,32 @@
 #include <sys/stat.h>
 #include <poll.h>
 
+/* Futex support for efficient SHM wait/wake (Linux only) */
+#ifdef __linux__
+#include <linux/futex.h>
+#include <sys/syscall.h>
+
+static inline void shm_futex_wake(volatile uint32_t *addr)
+{
+    syscall(SYS_futex, addr, FUTEX_WAKE, 1, NULL, NULL, 0);
+}
+
+static inline int shm_futex_wait(volatile uint32_t *addr, uint32_t expected,
+                                  const struct timespec *timeout)
+{
+    return syscall(SYS_futex, addr, FUTEX_WAIT, expected, timeout, NULL, 0);
+}
+#else
+static inline void shm_futex_wake(volatile uint32_t *addr) { (void)addr; }
+static inline int shm_futex_wait(volatile uint32_t *addr, uint32_t expected,
+                                  const void *timeout)
+{
+    (void)addr; (void)expected; (void)timeout;
+    usleep(10);
+    return 0;
+}
+#endif
+
 /* ========================================================================= */
 /*                      SHARED MEMORY DEFINITIONS                            */
 /* ========================================================================= */
@@ -554,13 +580,24 @@ static uint64_t slab_proxy_shm_transaction(SlabPeriphProxyState *s,
         header[11] = cpu ? cpu->env.regs[15] : 0;
     }
 
-    /* Memory barrier */
+    /* Memory barrier + wake Python handler if futex-waiting on seq word */
     __sync_synchronize();
+    shm_futex_wake(&header[7]);
 
-    /* Wait for response (status != 0) */
-    while (header[3] == 0 && timeout_us > 0) {
-        usleep(10);
-        timeout_us -= 10;
+    /* Wait for response (status != 0) using futex on Linux, usleep on macOS */
+    {
+#ifdef __linux__
+        struct timespec ts = {0, 100000}; /* 100us futex timeout */
+        while (header[3] == 0 && timeout_us > 0) {
+            shm_futex_wait(&header[3], 0, &ts);
+            timeout_us -= 100;
+        }
+#else
+        while (header[3] == 0 && timeout_us > 0) {
+            usleep(10);
+            timeout_us -= 10;
+        }
+#endif
     }
 
     if (header[3] != 0) {
@@ -820,6 +857,7 @@ static void slab_proxy_shm_check_dma(SlabPeriphProxyState *s)
     if (dma_size > SHM_DMA_MAX_SIZE) {
         header[15] = 3;  /* Error: too large */
         __sync_synchronize();
+        shm_futex_wake(&header[15]);
         return;
     }
 
@@ -834,10 +872,11 @@ static void slab_proxy_shm_check_dma(SlabPeriphProxyState *s)
                             attrs, data_region, dma_size);
     }
 
-    /* Signal completion */
+    /* Signal completion + wake Python if futex-waiting on status word */
     header[12] = 0;   /* Clear command */
     header[15] = 2;   /* Done */
     __sync_synchronize();
+    shm_futex_wake(&header[15]);
 }
 
 static void slab_proxy_shm_irq_timer(void *opaque)

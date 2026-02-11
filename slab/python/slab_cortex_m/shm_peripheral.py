@@ -20,10 +20,56 @@ from typing import Any, Dict, Optional, Callable, List
 from enum import IntEnum
 from threading import Thread, Lock
 import ctypes
+import platform
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from slab_peripherals.bus_logger import log_unhandled as _log_unhandled
+
+
+# --- Futex support (Linux only) ---
+# On Linux, uses futex syscall for efficient cross-process wait/wake on
+# shared memory words. On macOS and other platforms, falls back to
+# adaptive sleep.
+
+_HAS_FUTEX = False
+_SYS_futex = 0
+_FUTEX_WAIT = 0
+_FUTEX_WAKE = 1
+_libc = None
+
+if os.name == 'posix' and platform.system() == 'Linux':
+    try:
+        _libc = ctypes.CDLL('libc.so.6', use_errno=True)
+        _libc.syscall.restype = ctypes.c_long
+        _arch = platform.machine()
+        _futex_nrs = {
+            'x86_64': 202, 'aarch64': 98, 'i686': 240, 'i386': 240,
+            'armv7l': 240, 'riscv64': 98,
+        }
+        if _arch in _futex_nrs:
+            _SYS_futex = _futex_nrs[_arch]
+            _HAS_FUTEX = True
+    except OSError:
+        pass
+
+
+def _futex_wait(addr: int, expected: int, timeout_ns: int = 100_000_000) -> int:
+    """Wait until the uint32 at addr differs from expected (Linux futex)."""
+    ts = (ctypes.c_long * 2)(timeout_ns // 1_000_000_000,
+                              timeout_ns % 1_000_000_000)
+    return _libc.syscall(
+        ctypes.c_long(_SYS_futex), ctypes.c_void_p(addr),
+        ctypes.c_int(_FUTEX_WAIT), ctypes.c_int(expected),
+        ctypes.byref(ts), ctypes.c_void_p(0), ctypes.c_int(0))
+
+
+def _futex_wake(addr: int, count: int = 1) -> int:
+    """Wake up to count waiters blocked on addr (Linux futex)."""
+    return _libc.syscall(
+        ctypes.c_long(_SYS_futex), ctypes.c_void_p(addr),
+        ctypes.c_int(_FUTEX_WAKE), ctypes.c_int(count),
+        ctypes.c_void_p(0), ctypes.c_void_p(0), ctypes.c_int(0))
 from slab_peripherals.mpu import MemoryProtectionController, CortexMPU, MPURegion, MPUCtrlBits
 try:
     from slab_peripherals.pmp import RiscVPMP
@@ -345,8 +391,27 @@ class ShmPeripheralBridge:
         self._thread.start()
 
     def _handler_loop(self):
-        """Main handler loop - polls shared memory for commands."""
+        """Main handler loop - polls shared memory for commands.
+
+        On Linux, uses futex(FUTEX_WAIT) on the sequence word for efficient
+        blocking (near-zero CPU when idle, sub-microsecond wake latency).
+        On macOS, uses adaptive sleep tiers to balance latency vs CPU usage.
+        """
         last_seq = 0
+        idle_count = 0
+
+        # Prepare futex pointers (Linux only)
+        use_futex = _HAS_FUTEX and self._shm is not None
+        seq_futex_addr = 0
+        status_futex_addr = 0
+        if use_futex:
+            try:
+                seq_word = ctypes.c_uint32.from_buffer(self._shm.buf, 28)
+                seq_futex_addr = ctypes.addressof(seq_word)
+                status_word = ctypes.c_uint32.from_buffer(self._shm.buf, 12)
+                status_futex_addr = ctypes.addressof(status_word)
+            except Exception:
+                use_futex = False
 
         while self._running:
             # Read header
@@ -356,6 +421,8 @@ class ShmPeripheralBridge:
 
             # Check for new command (sequence number changed)
             if seq != last_seq and command != ShmCommand.NOP:
+                idle_count = 0
+
                 # Read PC from extended v1 header (offset 44)
                 if len(header_data) >= 48:
                     self.last_pc = struct.unpack('<I', header_data[44:48])[0]
@@ -378,16 +445,27 @@ class ShmPeripheralBridge:
                         struct.pack_into('<I', self._shm.buf, 12, 1)  # Status = done
                         struct.pack_into('<I', self._shm.buf, 20, result & 0xFFFFFFFF)
 
+                # Wake QEMU if it's futex-waiting on status word
+                if use_futex:
+                    _futex_wake(status_futex_addr)
+
                 last_seq = seq
 
                 # Poll for fault notifications from QEMU plugin
                 if self.fault_handler:
                     self.fault_handler.poll_shm_faults(self)
             else:
-                # No new command - yield thread (sched_yield on Linux)
-                # time.sleep(0.0001) takes ~160us on Linux due to timer granularity;
-                # time.sleep(0) just yields the thread for lower latency
-                time.sleep(0)
+                idle_count += 1
+                if use_futex:
+                    # Linux: efficient wait on sequence word change
+                    _futex_wait(seq_futex_addr, last_seq,
+                                timeout_ns=10_000_000)  # 10ms max
+                elif idle_count < 100:
+                    time.sleep(0)           # Hot: sched_yield
+                elif idle_count < 10000:
+                    time.sleep(0.0001)      # Warm: ~100us
+                else:
+                    time.sleep(0.001)       # Cold: 1ms
 
     def _handle_command(self, command: int, address: int, data: int,
                         size: int, bus_attrs: Optional[BusAttributes] = None) -> int:
@@ -498,6 +576,34 @@ class ShmPeripheralBridge:
             current &= ~(1 << bit_idx)
             struct.pack_into('<I', self._shm.buf, offset, current)
 
+    def _wait_dma_status(self, timeout_ms: int = 10000) -> int:
+        """Wait for DMA status to become DONE or ERROR.
+
+        Uses futex on Linux, adaptive sleep on macOS.
+        """
+        use_futex = _HAS_FUTEX and self._shm is not None
+        dma_status_addr = 0
+        if use_futex:
+            try:
+                w = ctypes.c_uint32.from_buffer(self._shm.buf,
+                                                 SHM_DMA_STATUS_OFF)
+                dma_status_addr = ctypes.addressof(w)
+            except Exception:
+                use_futex = False
+
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while time.monotonic() < deadline:
+            status = struct.unpack_from('<I', self._shm.buf,
+                                        SHM_DMA_STATUS_OFF)[0]
+            if status >= SHM_DMA_STATUS_DONE:
+                return status
+            if use_futex:
+                _futex_wait(dma_status_addr, SHM_DMA_STATUS_PENDING,
+                            timeout_ns=1_000_000)  # 1ms
+            else:
+                time.sleep(0.0001)
+        return SHM_DMA_STATUS_ERROR
+
     def dma_mem_read(self, addr: int, size: int) -> bytes:
         """
         Read memory from QEMU via SHM DMA command region.
@@ -516,17 +622,9 @@ class ShmPeripheralBridge:
             struct.pack_into('<I', self._shm.buf, SHM_DMA_CMD_OFF,
                              ShmCommand.DMA_READ)
 
-        # Spin-wait for QEMU to complete
-        for _ in range(10_000_000):
-            status = struct.unpack_from('<I', self._shm.buf,
-                                        SHM_DMA_STATUS_OFF)[0]
-            if status >= SHM_DMA_STATUS_DONE:
-                break
-            time.sleep(0)
-        else:
-            return b'\x00' * size
+        status = self._wait_dma_status()
 
-        if status == SHM_DMA_STATUS_ERROR:
+        if status != SHM_DMA_STATUS_DONE:
             return b'\x00' * size
 
         data = bytes(self._shm.buf[SHM_DMA_DATA_OFF:SHM_DMA_DATA_OFF + size])
@@ -558,14 +656,8 @@ class ShmPeripheralBridge:
             struct.pack_into('<I', self._shm.buf, SHM_DMA_CMD_OFF,
                              ShmCommand.DMA_WRITE)
 
-        # Spin-wait for QEMU to complete
-        for _ in range(10_000_000):
-            status = struct.unpack_from('<I', self._shm.buf,
-                                        SHM_DMA_STATUS_OFF)[0]
-            if status >= SHM_DMA_STATUS_DONE:
-                break
-            time.sleep(0)
-        else:
+        status = self._wait_dma_status()
+        if status != SHM_DMA_STATUS_DONE:
             return False
 
         # Clear command
