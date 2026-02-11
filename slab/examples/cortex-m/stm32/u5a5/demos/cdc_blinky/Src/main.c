@@ -2,6 +2,7 @@
   * STM32U5A5 USB CDC Blinky - Native U5 HAL (DWC2 OTG HS)
   *
   * Demonstrates:
+  * - PMSAv8 MPU configuration (Flash RO/exec, SRAM RW/noexec, Peripherals device)
   * - USB CDC ACM (VCP echo mode, sends "helloworld\n\r" on connect)
   * - USART1 output at 115200 baud on PA9 (TX) / PA10 (RX)
   * - LPUART1 output at 115200 baud on PA2 (TX) / PA3 (RX)
@@ -23,6 +24,7 @@ TIM_HandleTypeDef htim2;
 UART_HandleTypeDef huart1;
 UART_HandleTypeDef hlpuart1;
 
+static void MPU_Config(void);
 static void SystemClock_Config(void);
 static void LED_Init(void);
 static void TIM2_Init(void);
@@ -39,6 +41,8 @@ int main(void)
 {
   HAL_Init();
 
+  MPU_Config();
+
   SystemClock_Config();
 
   LED_Init();
@@ -52,6 +56,9 @@ int main(void)
   /* Print boot banner on both UARTs */
   UART_Print(&huart1,  "\r\n[U5A5] USART1: CDC Blinky starting...\r\n");
   UART_Print(&hlpuart1, "\r\n[U5A5] LPUART1: CDC Blinky starting...\r\n");
+
+  UART_Print(&huart1,  "[U5A5] MPU: PMSAv8 configured (4 regions)\r\n");
+  UART_Print(&hlpuart1, "[U5A5] MPU: PMSAv8 configured (4 regions)\r\n");
 
   /* Flash read/write demonstration */
   Flash_Demo();
@@ -72,6 +79,62 @@ int main(void)
       UART_Print(&hlpuart1, "[U5A5] USB host connected, hello sent.\r\n");
     }
   }
+}
+
+/**
+  * PMSAv8 MPU Configuration for STM32U5A5 (Cortex-M33)
+  *
+  * Memory map:
+  *   Region 0: Flash  0x08000000 - 0x083FFFFF (4 MB)  - Normal cacheable, RO, exec
+  *   Region 1: SRAM   0x20000000 - 0x2026FFFF (2.5 MB) - Normal cacheable, RW, noexec
+  *   Region 2: Periph 0x40000000 - 0x4FFFFFFF (256 MB) - Device-nGnRnE, RW, noexec
+  *   Region 3: System 0xE0000000 - 0xE00FFFFF (1 MB)   - Device-nGnRnE, RW, noexec
+  *
+  * MAIR attributes:
+  *   Attr 0: Device-nGnRnE  (0x00) - strongly-ordered device memory
+  *   Attr 1: Normal WB RA WA (0xFF) - write-back, read/write allocate, cacheable
+  */
+static void MPU_Config(void)
+{
+  /* Disable MPU before configuration */
+  ARM_MPU_Disable();
+
+  /* Configure memory attributes (MAIR0/MAIR1) */
+  ARM_MPU_SetMemAttr(0, ARM_MPU_ATTR(ARM_MPU_ATTR_DEVICE,
+                                       ARM_MPU_ATTR_DEVICE_nGnRnE));   /* Attr 0: Device */
+  ARM_MPU_SetMemAttr(1, ARM_MPU_ATTR(ARM_MPU_ATTR_MEMORY_(1,1,1,1),
+                                       ARM_MPU_ATTR_MEMORY_(1,1,1,1))); /* Attr 1: Normal WB */
+
+  /* Region 0: Flash - 0x08000000 to 0x083FFFFF
+   *   Normal cacheable (Attr 1), inner-shareable, read-only, executable
+   *   RBAR: SH=inner(3), RO=1, NP=0 (priv only), XN=0 (executable) */
+  ARM_MPU_SetRegion(0,
+    ARM_MPU_RBAR(0x08000000, ARM_MPU_SH_INNER, 1U, 0U, 0U),
+    ARM_MPU_RLAR(0x083FFFFF, 1));
+
+  /* Region 1: SRAM - 0x20000000 to 0x2026FFFF
+   *   Normal cacheable (Attr 1), inner-shareable, read-write, non-executable
+   *   RBAR: SH=inner(3), RO=0, NP=1 (any priv), XN=1 (no exec) */
+  ARM_MPU_SetRegion(1,
+    ARM_MPU_RBAR(0x20000000, ARM_MPU_SH_INNER, 0U, 1U, 1U),
+    ARM_MPU_RLAR(0x2026FFFF, 1));
+
+  /* Region 2: Peripherals - 0x40000000 to 0x4FFFFFFF
+   *   Device-nGnRnE (Attr 0), non-shareable, read-write, non-executable
+   *   RBAR: SH=non(0), RO=0, NP=0 (priv only), XN=1 (no exec) */
+  ARM_MPU_SetRegion(2,
+    ARM_MPU_RBAR(0x40000000, ARM_MPU_SH_NON, 0U, 0U, 1U),
+    ARM_MPU_RLAR(0x4FFFFFFF, 0));
+
+  /* Region 3: System peripherals (PPB) - 0xE0000000 to 0xE00FFFFF
+   *   Device-nGnRnE (Attr 0), non-shareable, read-write, non-executable
+   *   RBAR: SH=non(0), RO=0, NP=0 (priv only), XN=1 (no exec) */
+  ARM_MPU_SetRegion(3,
+    ARM_MPU_RBAR(0xE0000000, ARM_MPU_SH_NON, 0U, 0U, 1U),
+    ARM_MPU_RLAR(0xE00FFFFF, 0));
+
+  /* Enable MPU with PRIVDEFENA (privileged default map for uncovered regions) */
+  ARM_MPU_Enable(MPU_CTRL_PRIVDEFENA_Msk);
 }
 
 /**
