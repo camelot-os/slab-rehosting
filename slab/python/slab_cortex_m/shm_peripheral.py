@@ -246,6 +246,9 @@ class ShmPeripheralBridge:
     # ARMv8-M flag (Cortex-M23/M33/M55) -- used for PMSAv8 MPU format in SHM sync
     arch_v8m: bool = False
 
+    # Number of MPU regions (from board config mpu-regions, default 8)
+    mpu_regions: int = 8
+
     # Fault handler (for crash detection and auto-snapshot)
     fault_handler: Optional[Any] = None  # FaultHandler instance
 
@@ -503,8 +506,10 @@ class ShmPeripheralBridge:
             return mpu
 
         MPU_OFFSET = ShmHeader.HEADER_SIZE  # 64
-        MPU_MAX_REGIONS = 8
-        MPU_STATE_SIZE = 4 + MPU_MAX_REGIONS * 8  # 68 bytes
+        SHM_MPU_MAX = 16  # Max regions in SHM (matches C-side SHM_MPU_MAX_REGIONS)
+        num_regions = self.mpu_regions  # Actual region count from board config
+        shm_regions = min(num_regions, SHM_MPU_MAX)
+        MPU_STATE_SIZE = 4 + shm_regions * 8
 
         # Read MPU state from SHM
         raw = bytes(self._shm.buf[MPU_OFFSET:MPU_OFFSET + MPU_STATE_SIZE])
@@ -514,7 +519,7 @@ class ShmPeripheralBridge:
         ctrl = struct.unpack('<I', raw[0:4])[0]
 
         if mpu is None:
-            mpu = CortexMPU(num_regions=MPU_MAX_REGIONS, arch_v8m=self.arch_v8m)
+            mpu = CortexMPU(num_regions=num_regions, arch_v8m=self.arch_v8m)
 
         # Update control register state
         mpu.enabled = bool(ctrl & (1 << MPUCtrlBits.ENABLE))
@@ -522,7 +527,7 @@ class ShmPeripheralBridge:
         mpu.privdefena = bool(ctrl & (1 << MPUCtrlBits.PRIVDEFENA))
 
         # Update regions from RBAR + RASR/RLAR pairs
-        for i in range(min(MPU_MAX_REGIONS, mpu.num_regions)):
+        for i in range(min(shm_regions, mpu.num_regions)):
             offset = 4 + i * 8
             rbar, second = struct.unpack('<II', raw[offset:offset + 8])
             if mpu.arch_v8m:

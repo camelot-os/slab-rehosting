@@ -899,16 +899,31 @@ class CortexMPU(MemoryProtectionController):
         result = []
         for r in self.regions:
             if r.enabled:
-                result.append({
-                    'index': r.index,
-                    'base': f"0x{r.base:08X}",
-                    'size': f"0x{r.size:X}" if r.size else "0",
-                    'end': f"0x{r.end:08X}" if r.size else "N/A",
-                    'ap': AccessPermission(r.ap).name,
-                    'xn': r.xn,
-                    'srd': f"0b{r.srd:08b}" if r.srd else "none",
-                    'cacheable': r.cacheable,
-                    'bufferable': r.bufferable,
-                    'shareable': r.shareable,
-                })
+                if r._v8m:
+                    region_end = r.end
+                    region_size = region_end - r.base
+                    result.append({
+                        'index': r.index,
+                        'base': f"0x{r.base:08X}",
+                        'limit': f"0x{r.limit | 0x1F:08X}",
+                        'size': f"0x{region_size:X}",
+                        'end': f"0x{region_end:08X}",
+                        'ap': AccessPermissionV8(r.ap).name,
+                        'xn': r.xn,
+                        'sh': r.sh,
+                        'attr_idx': r.attr_idx,
+                    })
+                else:
+                    result.append({
+                        'index': r.index,
+                        'base': f"0x{r.base:08X}",
+                        'size': f"0x{r.size:X}" if r.size else "0",
+                        'end': f"0x{r.end:08X}" if r.size else "N/A",
+                        'ap': AccessPermission(r.ap).name,
+                        'xn': r.xn,
+                        'srd': f"0b{r.srd:08b}" if r.srd else "none",
+                        'cacheable': r.cacheable,
+                        'bufferable': r.bufferable,
+                        'shareable': r.shareable,
+                    })
         return result
