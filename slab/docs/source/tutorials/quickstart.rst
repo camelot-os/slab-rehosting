@@ -4,7 +4,7 @@
 Quickstart Guide
 ====================
 
-This guide walks you through setting up MCUemu SLAB and running your first
+This guide walks you through setting up SLAB SLAB and running your first
 firmware emulation. By the end, you will have:
 
 1. A working QEMU build with the ``slab-cortex-m`` machine
@@ -15,13 +15,13 @@ firmware emulation. By the end, you will have:
 Prerequisites
 =============
 
-MCUemu requires a Linux host (tested on Debian 12 / Ubuntu 22.04+). The following
+SLAB requires a Linux host (tested on Debian 12 / Ubuntu 22.04+). The following
 tools must be installed before proceeding.
 
 Python 3.10+
 -------------
 
-MCUemu peripheral servers are written in Python. Version 3.10 is required for
+SLAB peripheral servers are written in Python. Version 3.10 is required for
 ``match`` statements and modern type hints.
 
 .. code-block:: bash
@@ -158,7 +158,7 @@ You need **two terminals** open in the repository root.
 Step 1: Start the Peripheral Server
 -------------------------------------
 
-In the first terminal, start the MCUemu peripheral server. This creates a
+In the first terminal, start the SLAB peripheral server. This creates a
 default STM32F4 peripheral set and listens for QEMU connections on port 5555.
 
 .. code-block:: bash
@@ -169,7 +169,7 @@ default STM32F4 peripheral set and listens for QEMU connections on port 5555.
 Expected output::
 
    ======================================================================
-     MCUemu Peripheral Server
+     SLAB Peripheral Server
      Configuration: STM32F4xx
    ======================================================================
 
@@ -211,7 +211,7 @@ Back in the **server terminal**, you will see the firmware initializing peripher
 
 ::
 
-   21:35:33.415 [ INFO] MCUemu      : QEMU connected from ('127.0.0.1', 35446)
+   21:35:33.415 [ INFO] SLAB      : QEMU connected from ('127.0.0.1', 35446)
    21:35:33.937 [ INFO] P.TIM2      : Timer fired: IRQ 28
    21:35:34.437 [ INFO] P.TIM2      : Timer fired: IRQ 28
    ...
@@ -229,18 +229,18 @@ automates the process and reports MMIO statistics:
 
    PYTHONPATH=slab/python python3 slab/tests/e2e_firmware_test.py
 
-Expected output (27 tests, all passing)::
+Expected output (31 tests, all passing)::
 
    ========================================================================
      SLAB E2E Firmware Test Suite
      QEMU: .../build/qemu-system-arm
-     Tests: 27 available, 0 skipped (no firmware)
+     Tests: 31 available, 0 skipped (no firmware)
    ========================================================================
 
-     [1/27] STM32F405 HelloBlink [legacy]... PASS (72192 MMIO, 6.0s)
-     [2/27] STM32F405 HelloBlink [board]... PASS (72140 MMIO, 6.0s)
+     [1/31] STM32F405 HelloBlink [legacy]... PASS (72192 MMIO, 6.0s)
+     [2/31] STM32F405 HelloBlink [board]... PASS (72140 MMIO, 6.0s)
      ...
-     [27/27] STM32H563 TZ Secure [direct]... PASS (1600 MMIO, 10.0s)
+     [31/31] STM32H563 TZ Secure [direct]... PASS (1600 MMIO, 10.0s)
               uart: [SECURE] STM32H563 TrustZone Boot
               uart: [SECURE] SAU configured, GTZC initialized
               uart: [SECURE] IWDG watchdog enabled
@@ -248,7 +248,7 @@ Expected output (27 tests, all passing)::
               uart: [SECURE] Validating NS image...
 
    ========================================================================
-     RESULTS: 27 passed, 0 failed / 27 tested
+     RESULTS: 31 passed, 0 failed / 31 tested
    ========================================================================
 
 
@@ -401,7 +401,7 @@ board, direct), and configurations:
 
    PYTHONPATH=slab/python python3 slab/tests/e2e_firmware_test.py
 
-All 27 tests should pass. Each test:
+All 31 tests should pass. Each test:
 
 1. Creates a Python peripheral server on a random port
 2. Launches QEMU with the firmware and correct machine properties
@@ -409,7 +409,7 @@ All 27 tests should pass. Each test:
 4. Counts MMIO operations and captures UART output
 5. Reports PASS if the MMIO count exceeds the minimum threshold
 
-Unit tests for the peripheral libraries (439 tests) can be run with pytest:
+Unit tests for the peripheral libraries can be run with pytest:
 
 .. code-block:: bash
 
@@ -417,21 +417,21 @@ Unit tests for the peripheral libraries (439 tests) can be run with pytest:
 
 Expected output::
 
-   439 passed in ~7s
+   609 passed in ~18s
 
 
 Architecture Overview
 =====================
 
-MCUemu uses a modular architecture separating CPU emulation (QEMU) from
+SLAB uses a modular architecture separating CPU emulation (QEMU) from
 peripheral behavior (Python):
 
 .. figure:: ../images/mcuemu_architecture.png
-   :alt: MCUemu Architecture Diagram
+   :alt: SLAB Architecture Diagram
    :align: center
    :width: 100%
 
-   MCUemu Architecture: QEMU handles CPU/memory, Python handles peripherals
+   SLAB Architecture: QEMU handles CPU/memory, Python handles peripherals
 
 **Key Components:**
 

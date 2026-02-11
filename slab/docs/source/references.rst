@@ -4,7 +4,7 @@
 References
 ==========
 
-This page lists the technical references and specifications used in MCUemu.
+This page lists the technical references and specifications used in SLAB.
 
 ARM Architecture
 ================
@@ -87,7 +87,7 @@ CMSIS-SVD
 .. [CMSIS-SVD] CMSIS System View Description Format
    https://arm-software.github.io/CMSIS_5/SVD/html/index.html
 
-   SVD files used in MCUemu are sourced from:
+   SVD files used in SLAB are sourced from:
    https://github.com/posborne/cmsis-svd
 
 QEMU
@@ -144,7 +144,7 @@ Academic References
 Copyright
 =========
 
-MCUemu is developed by Twisted Wires Security Lab.
+SLAB is developed by Twisted Wires Security Lab.
 
 Copyright (C) 2026 Twisted Wires Security Lab. All Rights Reserved.
 

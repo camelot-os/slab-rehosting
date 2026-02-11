@@ -1,6 +1,6 @@
 # Configuration file for the Sphinx documentation builder.
 #
-# MCUemu - Generic MCU Emulation Platform
+# SLAB - Software Lab for ARM Cortex-M Peripheral Emulation
 # Professional Documentation
 #
 

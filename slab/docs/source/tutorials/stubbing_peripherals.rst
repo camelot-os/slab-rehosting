@@ -4,13 +4,13 @@
 Stubbing Peripherals
 =====================
 
-This tutorial explains how to create peripheral stubs for MCUemu.
+This tutorial explains how to create peripheral stubs for SLAB.
 Stubs intercept MMIO accesses and provide responses that satisfy firmware expectations.
 
 Peripheral Model Architecture
 =============================
 
-Every MCUemu peripheral follows a common interface:
+Every SLAB peripheral follows a common interface:
 
 .. figure:: ../images/peripheral_model.png
    :alt: Peripheral Model
@@ -23,7 +23,7 @@ Every MCUemu peripheral follows a common interface:
    :caption: Base Peripheral Class
 
    class BasePeripheral:
-       """Base class for all MCUemu peripherals."""
+       """Base class for all SLAB peripherals."""
 
        def __init__(self, base: int, size: int = 0x400, name: str = ""):
            self.base = base

@@ -4,7 +4,7 @@
 Architecture Overview
 ======================
 
-MCUemu uses a modular architecture that separates CPU emulation (QEMU) from
+SLAB uses a modular architecture that separates CPU emulation (QEMU) from
 peripheral behavior (Python), enabling flexible firmware analysis and testing.
 
 Design Principles
@@ -20,11 +20,11 @@ System Components
 =================
 
 .. figure:: ../images/mcuemu_architecture.png
-   :alt: MCUemu Architecture
+   :alt: SLAB Architecture
    :align: center
    :width: 100%
 
-   MCUemu Architecture Overview
+   SLAB Architecture Overview
 
 QEMU slab-cortex-m Machine
 --------------------------
@@ -192,7 +192,7 @@ Pre-built peripheral collections for common MCUs:
 USB OTG Integration
 ===================
 
-For USB device emulation, MCUemu includes a USBIP bridge:
+For USB device emulation, SLAB includes a USBIP bridge:
 
 .. figure:: ../images/usb_architecture.png
    :alt: USB Architecture

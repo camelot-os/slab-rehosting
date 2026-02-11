@@ -4,7 +4,7 @@
 Peripheral Basics
 ==================
 
-This tutorial explains how MCUemu peripherals work and how to interact with them.
+This tutorial explains how SLAB peripherals work and how to interact with them.
 
 MMIO Access Model
 =================
@@ -25,7 +25,7 @@ Each peripheral occupies a range of addresses and exposes registers:
    ─────────────────────────────────────────
    0x00000000 - 0x1FFFFFFF   Code/Flash
    0x20000000 - 0x3FFFFFFF   SRAM
-   0x40000000 - 0x5FFFFFFF   Peripherals  ← MCUemu proxies this
+   0x40000000 - 0x5FFFFFFF   Peripherals  ← SLAB proxies this
    0x60000000 - 0x9FFFFFFF   External RAM
    0xA0000000 - 0xDFFFFFFF   External Device
    0xE0000000 - 0xFFFFFFFF   Private Peripheral Bus (PPB)
@@ -143,7 +143,7 @@ Writing 1 sets or clears specific bits without affecting others.
 Using Pre-built Peripheral Sets
 ===============================
 
-MCUemu provides complete peripheral sets for common MCUs:
+SLAB provides complete peripheral sets for common MCUs:
 
 .. code-block:: python
 

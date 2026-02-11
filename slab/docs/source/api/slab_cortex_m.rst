@@ -32,7 +32,7 @@ USB CDC Peripheral
    :members:
    :undoc-members:
 
-MCUemu Server
+SLAB Server
 =============
 
 .. automodule:: slab_cortex_m.mcuemu_server

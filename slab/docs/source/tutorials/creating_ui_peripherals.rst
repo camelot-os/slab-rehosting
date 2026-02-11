@@ -4,13 +4,13 @@
 Creating UI Peripherals
 ==========================
 
-This tutorial shows how to create visual peripherals using MCUemu's GUI framework.
+This tutorial shows how to create visual peripherals using SLAB's GUI framework.
 You'll learn to build LED displays, consoles, and logic analyzers.
 
 Overview
 ========
 
-MCUemu provides ``slab_gui`` for pygame-based visualization:
+SLAB provides ``slab_gui`` for pygame-based visualization:
 
 .. figure:: ../images/debug_dashboard.png
    :alt: Debug Dashboard
@@ -86,10 +86,10 @@ Connecting LEDs to GPIO
 
 .. code-block:: python
 
-   from slab_stm32.stm32_gpio import STM32GPIO
+   from slab_stm32.stm32_gpio import STM32GPIOv1
 
    # Create GPIO with LED callback
-   gpioa = STM32GPIO(base=0x40020000, port_name='A')
+   gpioa = STM32GPIOv1(port='A', base=0x40020000)
 
    def on_gpio_change(pin, value, is_output):
        if is_output:
@@ -147,9 +147,9 @@ Connecting Console to UART
 
 .. code-block:: python
 
-   from slab_stm32.stm32_usart import STM32USART
+   from slab_stm32.stm32_usart import STM32USARTv1
 
-   usart = STM32USART(base=0x40004400, name='USART2')
+   usart = STM32USARTv1(index=2, base=0x40004400)
 
    # Display TX output
    def on_uart_tx(byte):
@@ -248,7 +248,7 @@ The ``DebugDashboardPro`` combines all widgets:
    # Create dashboard
    dashboard = DebugDashboardPro(
        width=900, height=700,
-       title="MCUemu Debug Dashboard"
+       title="SLAB Debug Dashboard"
    )
 
    if not dashboard.init_pygame():

@@ -4,7 +4,7 @@
 Peripheral Model
 =================
 
-This document describes the peripheral implementation model used in MCUemu.
+This document describes the peripheral implementation model used in SLAB.
 
 Design Goals
 ============
@@ -22,7 +22,7 @@ All peripherals inherit from a common base:
 .. code-block:: python
 
    class BasePeripheral:
-       """Base class for MCUemu peripherals."""
+       """Base class for SLAB peripherals."""
 
        def __init__(self, base: int, size: int = 0x400, name: str = ""):
            self.base = base
@@ -144,10 +144,10 @@ Peripherals support callbacks for external integration:
 
 .. code-block:: python
 
-   class STM32GPIO:
-       def __init__(self, base, port_name):
+   class STM32GPIOv1:
+       def __init__(self, port, base):
            self.base = base
-           self.port_name = port_name
+           self.port_name = port
 
            # Callback: (pin, value, is_output) -> None
            self.on_pin_change = None
@@ -233,11 +233,11 @@ Group peripherals into MCU-specific sets:
 
            self.gpio = {}
            for i, name in enumerate('ABCDEFGHI'):
-               gpio = STM32GPIO(0x40020000 + i * 0x400, name)
+               gpio = STM32GPIOv1(port=name, base=0x40020000 + i * 0x400)
                self.gpio[name] = gpio
                self.peripherals[f'GPIO{name}'] = gpio
 
-           self.usart2 = STM32USART(0x40004400)
+           self.usart2 = STM32USARTv1(index=2, base=0x40004400)
            self.peripherals['USART2'] = self.usart2
 
            self.cryp = STM32CRYP(0x50060000)
@@ -265,7 +265,7 @@ Validate peripheral behavior with unit tests:
 .. code-block:: python
 
    def test_gpio_bsrr():
-       gpio = STM32GPIO(0x40020000, 'A')
+       gpio = STM32GPIOv1(port='A', base=0x40020000)
 
        # Set pin 5
        gpio.write(0x40020018, 4, 0x0020)  # BSRR
