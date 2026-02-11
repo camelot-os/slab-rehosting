@@ -1,0 +1,165 @@
+% CI Runner Architecture -- Sentry Kernel Example
+%
+% Shows the data flow between components:
+% Board YAML -> Board Builder -> TCP Server <-> QEMU
+% With side paths: MMIO Tracer, UART Capture, GDB
+%
+% Compile with: pdflatex ci_runner_architecture.tex
+% Convert to PNG: pdftoppm -png -r 200 ci_runner_architecture.pdf ci_runner_architecture
+%
+% Author: Mathieu Renard <mathieu.renard@twistedwires.io>
+% Copyright (C) 2026 Twisted Wires Security Lab
+% SPDX-License-Identifier: Apache-2.0
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc,decorations.pathreplacing}
+
+\begin{document}
+
+\definecolor{trustzoneblue}{RGB}{0,123,255}
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{spiblue}{RGB}{0,102,204}
+\definecolor{i2corange}{RGB}{230,126,34}
+\definecolor{uartgreen}{RGB}{39,174,96}
+\definecolor{gpiored}{RGB}{192,57,43}
+\definecolor{mcugray}{RGB}{100,100,100}
+\definecolor{passgreen}{RGB}{40,167,69}
+\definecolor{failred}{RGB}{220,53,69}
+
+\begin{tikzpicture}[
+    comp/.style={
+        rectangle, rounded corners=4pt, draw=#1, fill=#1!8,
+        minimum width=3cm, minimum height=1.6cm, align=center,
+        font=\sffamily\small, line width=1pt
+    },
+    small/.style={
+        rectangle, rounded corners=3pt, draw=#1, fill=#1!8,
+        minimum width=2.4cm, minimum height=1cm, align=center,
+        font=\sffamily\scriptsize, line width=0.8pt
+    },
+    file/.style={
+        rectangle, rounded corners=2pt, draw=mcugray, fill=mcugray!5,
+        minimum width=2.2cm, minimum height=0.7cm, align=center,
+        font=\ttfamily\tiny, line width=0.5pt
+    },
+    arrow/.style={
+        -{Stealth[length=5pt]}, line width=1.2pt, color=#1
+    },
+    bidi/.style={
+        {Stealth[length=5pt]}-{Stealth[length=5pt]}, line width=1.2pt, color=#1
+    },
+    label/.style={
+        font=\sffamily\tiny, color=mcugray
+    },
+]
+
+% === Input Files (left) ===
+\node[file] (hex1) at (0,0) {sentry-kernel.hex};
+\node[file, below=0.2cm of hex1] (hex2) {idle.hex};
+\node[file, below=0.2cm of hex2] (yaml) {board.yaml};
+
+% === HEX Merger ===
+\node[small=spiblue, right=1.5cm of hex1, yshift=-0.4cm] (merger) {
+    \textbf{HEX Merger}\\
+    \texttt{parse\_ihex()}
+};
+
+% === Board Builder ===
+\node[small=i2corange, below=0.8cm of merger] (builder) {
+    \textbf{Board Builder}\\
+    \texttt{build\_board()}
+};
+
+% === Combined binary ===
+\node[file, right=1.3cm of merger] (combined) {combined.bin};
+
+% === TCP Server (center) ===
+\node[comp=securegreen, right=1.3cm of builder, yshift=0.5cm] (server) {
+    \textbf{TCP Server}\\
+    {\scriptsize BasePeripheralServer}\\
+    {\tiny port auto-allocated}
+};
+
+% === QEMU (right) ===
+\node[comp=trustzoneblue, right=2cm of server] (qemu) {
+    \textbf{QEMU}\\
+    {\scriptsize slab-cortex-m}\\
+    {\tiny Cortex-M33 @ 160MHz}
+};
+
+% === Side components ===
+
+% MMIO Tracer (below server)
+\node[small=uartgreen, below=1cm of server] (tracer) {
+    \textbf{MMIO Tracer}\\
+    {\tiny .mmio / .jsonl / .csv}
+};
+
+% UART Buffer (below tracer)
+\node[small=gpiored, below=0.5cm of tracer] (uart) {
+    \textbf{UART Capture}\\
+    {\tiny LiveUartBuffer}
+};
+
+% GDB (below QEMU)
+\node[small=i2corange, below=1cm of qemu] (gdb) {
+    \textbf{GDB}\\
+    {\tiny gdb-multiarch :1234}
+};
+
+% Results (right of tracer)
+\node[small=passgreen, right=1.5cm of tracer, yshift=-0.3cm] (results) {
+    \textbf{Results}\\
+    {\tiny PASS/FAIL + report}
+};
+
+% === Arrows ===
+
+% Input -> Merger
+\draw[arrow=spiblue] (hex1.east) -- ++(0.3,0) |- (merger.west);
+\draw[arrow=spiblue] (hex2.east) -- ++(0.3,0) |- (merger.west);
+
+% Merger -> Combined
+\draw[arrow=spiblue] (merger) -- (combined);
+
+% YAML -> Builder
+\draw[arrow=i2corange] (yaml.east) -- ++(0.3,0) |- (builder.west);
+
+% Builder -> Server
+\draw[arrow=securegreen] (builder) -- node[label, above] {Board} (server);
+
+% Combined -> QEMU
+\draw[arrow=spiblue] (combined.east) -- ++(0.5,0) |- (qemu.north west);
+
+% Server <-> QEMU (bidirectional TCP)
+\draw[bidi=trustzoneblue] (server) -- node[label, above] {TCP MMIO} (qemu);
+
+% Server -> Tracer
+\draw[arrow=uartgreen] (server) -- node[label, right] {traces} (tracer);
+
+% Server -> UART
+\draw[arrow=gpiored] (server.south) -- ++(0,-0.3) -| (uart.north);
+
+% QEMU -> GDB
+\draw[bidi=i2corange, dashed] (qemu) -- node[label, right] {RSP} (gdb);
+
+% Tracer -> Results
+\draw[arrow=passgreen] (tracer) -- (results);
+\draw[arrow=passgreen] (uart.east) -- ++(0.3,0) |- (results.west);
+
+% IRQ arrow (server -> QEMU, below main arrow)
+\node[label, below=0.15cm of server.east, xshift=1cm] {+ IRQ inject};
+
+% Title
+\node[above=1.2cm of server, xshift=1cm, font=\sffamily\large\bfseries, color=mcugray] {
+    CI Runner Architecture -- Sentry Kernel
+};
+
+% Brace for input files
+\draw[decorate, decoration={brace, amplitude=5pt, mirror}, line width=0.8pt, color=mcugray]
+    ([xshift=-0.3cm]hex1.north west) -- ([xshift=-0.3cm]yaml.south west)
+    node[midway, left=0.3cm, font=\sffamily\tiny, color=mcugray, align=center] {Input\\Files};
+
+\end{tikzpicture}
+\end{document}

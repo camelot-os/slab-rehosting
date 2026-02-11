@@ -221,6 +221,9 @@ Documentation
    tutorials/hardware_in_the_loop
    tutorials/debugging_bootloops
    tutorials/trustzone_emulation
+   tutorials/firmware_dump_emulation
+   tutorials/board_e2e_session
+   tutorials/sentry_ci_runner
 
 .. toctree::
    :maxdepth: 2

@@ -1,0 +1,135 @@
+% Firmware Dump Emulation Workflow
+%
+% Shows the 5-step pipeline for emulating a firmware .bin dump:
+% SVD Parsing -> Peripheral Set -> Board YAML -> QEMU Run -> MMIO Report
+%
+% Compile with: pdflatex firmware_dump_workflow.tex
+% Convert to PNG: pdftoppm -png -r 200 firmware_dump_workflow.pdf firmware_dump_workflow
+%
+% Author: Mathieu Renard <mathieu.renard@twistedwires.io>
+% Copyright (C) 2026 Twisted Wires Security Lab
+% SPDX-License-Identifier: Apache-2.0
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc}
+
+\begin{document}
+
+\definecolor{trustzoneblue}{RGB}{0,123,255}
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{spiblue}{RGB}{0,102,204}
+\definecolor{i2corange}{RGB}{230,126,34}
+\definecolor{uartgreen}{RGB}{39,174,96}
+\definecolor{gpiored}{RGB}{192,57,43}
+\definecolor{mcugray}{RGB}{100,100,100}
+\definecolor{passgreen}{RGB}{40,167,69}
+
+\begin{tikzpicture}[
+    step/.style={
+        rectangle, rounded corners=4pt, draw=#1, fill=#1!10,
+        text width=3.2cm, minimum height=2.2cm, align=center,
+        font=\sffamily\small, line width=1pt
+    },
+    input/.style={
+        rectangle, rounded corners=2pt, draw=mcugray, fill=mcugray!5,
+        text width=2.8cm, minimum height=0.8cm, align=center,
+        font=\sffamily\tiny, line width=0.5pt
+    },
+    arrow/.style={
+        -{Stealth[length=5pt]}, line width=1.2pt, color=#1
+    },
+    bigarrow/.style={
+        -{Stealth[length=8pt]}, line width=2pt, color=mcugray!60
+    },
+]
+
+% Step 1: Firmware + SVD
+\node[step=spiblue] (step1) {
+    \textbf{1. Identify Target}\\[4pt]
+    \texttt{firmware.bin}\\
+    \texttt{STM32F405.svd}\\[2pt]
+    {\tiny Vector table analysis}
+};
+
+% Step 2: Peripheral Set
+\node[step=i2corange, right=1.2cm of step1] (step2) {
+    \textbf{2. Peripheral Set}\\[4pt]
+    \texttt{MCU\_REGISTRY}\\[2pt]
+    {\tiny 21 supported MCUs}\\
+    {\tiny or SVD auto-stub}
+};
+
+% Step 3: Board YAML
+\node[step=securegreen, right=1.2cm of step2] (step3) {
+    \textbf{3. Board Config}\\[4pt]
+    \texttt{board.yaml}\\[2pt]
+    {\tiny MCU + clock + SRAM}\\
+    {\tiny + external devices}
+};
+
+% Step 4: QEMU Emulation
+\node[step=trustzoneblue, right=1.2cm of step3] (step4) {
+    \textbf{4. QEMU Run}\\[4pt]
+    \texttt{qemu-system-arm}\\
+    \texttt{+ TCP server}\\[2pt]
+    {\tiny Firmware executes}
+};
+
+% Step 5: MMIO Report
+\node[step=uartgreen, right=1.2cm of step4] (step5) {
+    \textbf{5. Analysis}\\[4pt]
+    MMIO Trace\\
+    UART Output\\
+    LaTeX Report\\[2pt]
+    {\tiny + GDB debug}
+};
+
+% Arrows between steps
+\draw[bigarrow] (step1) -- (step2);
+\draw[bigarrow] (step2) -- (step3);
+\draw[bigarrow] (step3) -- (step4);
+\draw[bigarrow] (step4) -- (step5);
+
+% Input files below step 1
+\node[input, below=0.6cm of step1] (fw) {
+    \texttt{.bin} firmware dump\\
+    {\tiny Initial SP + Reset\_Handler}
+};
+\draw[arrow=spiblue] (fw) -- (step1);
+
+% SVD file below step 2
+\node[input, below=0.6cm of step2] (svd) {
+    \texttt{.svd} register defs\\
+    {\tiny Peripheral base addresses}
+};
+\draw[arrow=i2corange] (svd) -- (step2);
+
+% YAML below step 3
+\node[input, below=0.6cm of step3] (yaml) {
+    \texttt{name: MyBoard}\\
+    \texttt{mcu: STM32F405}
+};
+\draw[arrow=securegreen] (yaml) -- (step3);
+
+% GDB below step 4
+\node[input, below=0.6cm of step4] (gdb) {
+    GDB on port 1234\\
+    {\tiny Fault handler breakpoints}
+};
+\draw[arrow=trustzoneblue, dashed] (gdb) -- (step4);
+
+% Output files below step 5
+\node[input, below=0.6cm of step5] (out) {
+    \texttt{trace.mmio}\\
+    \texttt{report.tex (TikZ)}
+};
+\draw[arrow=uartgreen] (step5) -- (out);
+
+% Title
+\node[above=0.8cm of step3, font=\sffamily\large\bfseries, color=mcugray] {
+    Firmware Dump Emulation Workflow
+};
+
+\end{tikzpicture}
+\end{document}
