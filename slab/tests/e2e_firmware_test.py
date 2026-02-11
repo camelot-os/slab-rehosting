@@ -390,6 +390,9 @@ async def run_one_test_shm(tc: TestCase) -> TestResult:
 
     # Create SHM bridge and register handler
     bridge = ShmPeripheralBridge(shm_name=shm_name)
+    cpu = tc.cpu
+    bridge.arch_v8m = cpu in ('cortex-m23', 'cortex-m33', 'cortex-m55', 'cortex-m85')
+    bridge.mpu_regions = board_config.mpu_regions
     bridge.create()
     bridge.register_peripheral(handler.base_address, handler)
     bridge.start_handler()
@@ -735,6 +738,31 @@ def build_test_cases() -> List[TestCase]:
         cpu="cortex-m33", mode="direct", mcu="STM32U5A5",
         timeout=8, expect_mmio=50,
         qemu_extra=u5a5_qemu,
+    ))
+
+    # -- STM32U5A9 Display + SDMMC (ThreadX + FileX + DSI/LTDC) --
+    u5a9_qemu = {
+        "sysclk-hz": "160000000",
+        "sram-size": "0x280000",
+        "flash-size": "0x400000",
+        "periph-base": "0x0BFA0000",
+        "periph-size": "0x54060000",
+    }
+    tests.append(TestCase(
+        name="STM32U5A9 Display+SDMMC [board]",
+        firmware="slab/examples/cortex-m/stm32/u5a9/demos/display_sdmmc/build/U5A9_Display_SDMMC.bin",
+        cpu="cortex-m33", mode="board",
+        board_yaml="slab/boards/stm32u5a9_display.yaml",
+        timeout=10, expect_mmio=50,
+        qemu_extra=u5a9_qemu,
+    ))
+
+    tests.append(TestCase(
+        name="STM32U5A9 Display+SDMMC [direct]",
+        firmware="slab/examples/cortex-m/stm32/u5a9/demos/display_sdmmc/build/U5A9_Display_SDMMC.bin",
+        cpu="cortex-m33", mode="direct", mcu="STM32U5A9",
+        timeout=10, expect_mmio=50,
+        qemu_extra=u5a9_qemu,
     ))
 
     # -- RP2040 (flash at 0x10000000) --
