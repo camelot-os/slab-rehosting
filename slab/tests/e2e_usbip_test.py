@@ -2,12 +2,13 @@
 """
 End-to-End USBIP Tests for Multi-Controller USB Support
 
-Tests five USB controller configurations:
+Tests six USB controller configurations:
 1. F405 -- DWC2 OTG FS (baseline, existing)
 2. WB55 -- PMA-based USB FS
 3. F103 BluePill -- PMA-based USB FS
 4. F411 BlackPill -- DWC2 OTG FS
-5. RP2040 -- Custom USB + DPRAM (infrastructure + bootrom firmware)
+5. U5A5 -- DWC2 OTG HS (Cortex-M33, ARMv8-M)
+6. RP2040 -- Custom USB + DPRAM (infrastructure + bootrom firmware)
 
 Captures full server + QEMU logs for report generation.
 
@@ -35,7 +36,7 @@ BOARDS_DIR = PROJECT_ROOT / "slab" / "boards"
 LOG_DIR = PROJECT_ROOT / "slab" / "tests" / "e2e_logs"
 
 sys.path.insert(0, str(SLAB_PYTHON))
-from slab_cortex_m.board import load_board_config, get_default_clock
+from slab_cortex_m.board import load_board_config, get_default_clock, get_qemu_cpu
 
 USBIP_VERSION = 0x0111
 
@@ -310,17 +311,23 @@ def _recv_exact(sock, n, timeout=10.0):
 
 
 def run_e2e_test(name, board_yaml, firmware_bin, tcp_port, usbip_port,
-                 usb_type, platform, qemu_extra=None, clock_hz=0, timeout=25):
+                 usb_type, platform, qemu_extra=None, clock_hz=0,
+                 cpu_type="", timeout=25):
     """Run a single E2E test: server + QEMU + USBIP protocol checks."""
     result = E2ETestResult(
         name=name, platform=platform, usb_type=usb_type)
-    # Auto-read clock from board YAML if not explicitly provided
-    if clock_hz == 0:
-        try:
-            cfg = load_board_config(str(board_yaml))
+    # Auto-read clock and CPU type from board YAML if not explicitly provided
+    try:
+        cfg = load_board_config(str(board_yaml))
+        if clock_hz == 0:
             clock_hz = get_default_clock(cfg)
-        except Exception:
+        if not cpu_type:
+            cpu_type = get_qemu_cpu(cfg)
+    except Exception:
+        if clock_hz == 0:
             clock_hz = 168000000  # fallback
+        if not cpu_type:
+            cpu_type = "cortex-m4"  # fallback
     start = time.time()
 
     server_log = LOG_DIR / f"{name}_server.log"
@@ -367,7 +374,7 @@ def run_e2e_test(name, board_yaml, firmware_bin, tcp_port, usbip_port,
             print(f"  [2/5] WARNING: USBIP port {usbip_port} not open")
 
         # Start QEMU
-        machine_props = f"slab-cortex-m,cpu-type=cortex-m4,tcp-port={tcp_port}"
+        machine_props = f"slab-cortex-m,cpu-type={cpu_type},tcp-port={tcp_port}"
         if clock_hz > 0:
             machine_props += f",sysclk-hz={clock_hz}"
         qemu_cmd = [
@@ -840,7 +847,7 @@ def main():
     results = []
 
     # Test 1: F405 DWC2 OTG (baseline)
-    print(f"\n[Test 1/4] F405 DWC2 OTG FS (baseline)")
+    print(f"\n[Test 1/8] F405 DWC2 OTG FS (baseline)")
     print(f"  Board: stm32f405_hello_blink.yaml")
     print(f"  Firmware: HelloBlink.bin (USB CDC)")
     r1 = run_e2e_test(
@@ -854,8 +861,8 @@ def main():
     )
     results.append(r1)
 
-    # Test 2: WB55 PMA USB FS (new)
-    print(f"\n[Test 2/4] WB55 PMA USB FS (new)")
+    # Test 2: WB55 PMA USB FS
+    print(f"\n[Test 2/8] WB55 PMA USB FS")
     print(f"  Board: stm32wb55_cdc_blinky.yaml")
     print(f"  Firmware: WB55_CDC_Blinky.bin (USB CDC)")
     r2 = run_e2e_test(
@@ -870,7 +877,7 @@ def main():
     results.append(r2)
 
     # Test 3: F103 BluePill PMA USB FS
-    print(f"\n[Test 3/6] F103 BluePill PMA USB FS")
+    print(f"\n[Test 3/8] F103 BluePill PMA USB FS")
     print(f"  Board: stm32f103_cdc_blinky.yaml")
     print(f"  Firmware: F103_CDC_Blinky.bin (USB CDC)")
     r3 = run_e2e_test(
@@ -885,7 +892,7 @@ def main():
     results.append(r3)
 
     # Test 4: F411 BlackPill DWC2 OTG FS
-    print(f"\n[Test 4/6] F411 BlackPill DWC2 OTG FS")
+    print(f"\n[Test 4/8] F411 BlackPill DWC2 OTG FS")
     print(f"  Board: stm32f411_cdc_blinky.yaml")
     print(f"  Firmware: F411_CDC_Blinky.bin (USB CDC)")
     r4 = run_e2e_test(
@@ -899,24 +906,43 @@ def main():
     )
     results.append(r4)
 
-    # Test 5: RP2040 infrastructure (Python-only)
-    print(f"\n[Test 5/6] RP2040 USB Infrastructure (Python-only)")
-    print(f"  No firmware -- testing DPRAM + inject methods")
-    r5 = test_rp2040_infrastructure()
+    # Test 5: U5A5 DWC2 OTG HS (Cortex-M33, ARMv8-M)
+    print(f"\n[Test 5/8] U5A5 DWC2 OTG HS (Cortex-M33)")
+    print(f"  Board: stm32u5a5_cdc_blinky.yaml")
+    print(f"  Firmware: U5A5_CDC_Blinky.bin (USB CDC)")
+    r5 = run_e2e_test(
+        name="u5a5_dwc2",
+        board_yaml=BOARDS_DIR / "stm32u5a5_cdc_blinky.yaml",
+        firmware_bin=PROJECT_ROOT / "slab/examples/cortex-m/stm32/u5a5/demos/cdc_blinky/build/U5A5_CDC_Blinky.bin",
+        tcp_port=5566,
+        usbip_port=3247,
+        usb_type="dwc2_otg_hs",
+        platform="STM32U5A5",
+        qemu_extra={
+            "sram-size": "0x270000", "flash-size": "0x400000",
+            "periph-base": "0x0BFA0000", "periph-size": "0x54060000",
+        },
+    )
     results.append(r5)
 
-    # Test 6: RP2040 bootrom firmware-in-the-loop USBIP
+    # Test 6: RP2040 infrastructure (Python-only)
+    print(f"\n[Test 6/8] RP2040 USB Infrastructure (Python-only)")
+    print(f"  No firmware -- testing DPRAM + inject methods")
+    r6 = test_rp2040_infrastructure()
+    results.append(r6)
+
+    # Test 7: RP2040 bootrom firmware-in-the-loop USBIP
     bootrom_bin = PROJECT_ROOT / "slab" / "roms" / "rp2040_b2.bin"
-    print(f"\n[Test 6/6] RP2040 Bootrom USBIP (firmware-in-the-loop)")
+    print(f"\n[Test 7/8] RP2040 Bootrom USBIP (firmware-in-the-loop)")
     if bootrom_bin.exists():
         print(f"  Bootrom: {bootrom_bin}")
-        r6 = test_rp2040_bootrom_usbip()
+        r7 = test_rp2040_bootrom_usbip()
     else:
         print(f"  SKIP: bootrom not found")
-        r6 = E2ETestResult(
+        r7 = E2ETestResult(
             name="rp2040_bootrom", platform="RP2040", usb_type="bootrom_fw")
-        r6.error = "bootrom binary not found (run slab/scripts/download_rp2040_bootrom.sh)"
-    results.append(r6)
+        r7.error = "bootrom binary not found (run slab/scripts/download_rp2040_bootrom.sh)"
+    results.append(r7)
 
     # Report
     print_report(results)
