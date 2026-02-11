@@ -9,8 +9,8 @@ Tests:
 
 Architecture:
     QEMU slab-cortex-m (Cortex-M33)
-      | TCP proxy protocol
-    SentryPeripheralServer (STM32U5A5PeripheralSet)
+      | TCP proxy protocol (BasePeripheralServer)
+    SentryBoardServer (Board from YAML config)
       | PMSAv8 MPU verification (Python model)
 
 Run:
@@ -23,7 +23,6 @@ SPDX-License-Identifier: Apache-2.0
 """
 
 import asyncio
-import struct
 import sys
 import os
 import socket
@@ -35,41 +34,52 @@ import logging
 sys.path.insert(0, os.path.join(os.path.dirname(__file__),
                                 '..', '..', '..', '..', '..', '..', 'python'))
 
-from slab_stm32 import STM32U5A5PeripheralSet
+from slab_cortex_m.board import load_board_config, get_qemu_cpu, get_default_clock
+from slab_cortex_m.board_builder import build_board
+from slab_cortex_m.base_server import BasePeripheralServer
 from slab_peripherals.mpu import CortexMPU, MPUReg, AccessPermissionV8
 
-# Protocol constants (match base_server.py / slab_cortex_m.c)
-CMD_READ = ord('R')
-CMD_READ_S = ord('S')
-CMD_WRITE = ord('W')
-CMD_WRITE_S = ord('T')
-CMD_IRQ = ord('I')
-CMD_CONFIG = ord('C')
+
+# =============================================================================
+# Live UART Buffer
+# =============================================================================
+
+class LiveUartBuffer(bytearray):
+    """bytearray that prints each byte to stdout as it arrives."""
+    def append(self, byte):
+        super().append(byte & 0xFF)
+        ch = byte & 0x7F
+        if 0x20 <= ch < 0x7F or ch in (0x0A, 0x0D, 0x09):
+            sys.stdout.write(chr(ch))
+            sys.stdout.flush()
 
 
 # =============================================================================
-# Peripheral Server
+# Board Server (BasePeripheralServer subclass)
 # =============================================================================
 
-class SentryPeripheralServer:
-    """Async TCP server for QEMU peripheral proxy."""
+class SentryBoardServer(BasePeripheralServer):
+    """Peripheral server backed by YAML board config."""
 
-    def __init__(self, periph_port: int):
-        self.periph_port = periph_port
-        self.stm32 = STM32U5A5PeripheralSet()
-        self._loop = None
-        self._thread = None
-        self._writer = None
-        self._access_count = 0
+    def __init__(self, board, port):
+        super().__init__(port)
+        self.board = board
+        self.board.irq_callback = self.send_irq
+        self.mmio_count = 0
         self._addr_counts = {}
-        self.uart_output = bytearray()
 
-    def _send_irq(self, irq_num: int, level: int):
-        if self._writer:
-            packet = struct.pack('<BIB', CMD_IRQ, irq_num, level)
-            self._writer.write(packet)
+    def create_peripherals(self):
+        pass  # Board already built from YAML
+
+    def find_peripheral(self, addr):
+        if self.board.contains(addr):
+            self.mmio_count += 1
+            self._addr_counts[addr] = self._addr_counts.get(addr, 0) + 1
+            return self.board
+        return None
 
     def start_threaded(self):
+        """Run the async TCP server in a background thread."""
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -80,74 +90,14 @@ class SentryPeripheralServer:
         self._loop.run_until_complete(self._serve())
 
     async def _serve(self):
+        self.running = True
         tcp_server = await asyncio.start_server(
-            self._handle_qemu_client, '127.0.0.1', self.periph_port)
+            self.handle_client, '127.0.0.1', self.port, reuse_address=True)
         async with tcp_server:
-            await asyncio.gather(tcp_server.serve_forever())
-
-    async def _handle_qemu_client(self, reader, writer):
-        self._writer = writer
-        for p in self.stm32.peripherals:
-            if hasattr(p, 'irq_callback'):
-                p.irq_callback = self._send_irq
-            if hasattr(p, 'name') and 'USART' in p.name and hasattr(p, 'on_tx'):
-                buf = self.uart_output
-                def make_hook(b=buf):
-                    def hook(byte):
-                        b.append(byte & 0xFF)
-                        ch = byte & 0x7F
-                        if 0x20 <= ch < 0x7F or ch in (0x0A, 0x0D):
-                            sys.stdout.write(chr(ch))
-                            sys.stdout.flush()
-                    return hook
-                p.on_tx = make_hook()
-
-        try:
-            while True:
-                data = await reader.read(1)
-                if not data:
-                    break
-                cmd = data[0]
-                if cmd in (CMD_READ, CMD_READ_S):
-                    payload = await reader.readexactly(13)
-                    addr, size = struct.unpack('<II', payload[:8])
-                    value = self._dispatch_read(addr, size)
-                    writer.write(struct.pack('<IB', value, 0))
-                    await writer.drain()
-                    self._access_count += 1
-                    self._addr_counts[addr] = self._addr_counts.get(addr, 0) + 1
-                elif cmd in (CMD_WRITE, CMD_WRITE_S):
-                    payload = await reader.readexactly(17)
-                    addr, size, value = struct.unpack('<III', payload[:12])
-                    self._dispatch_write(addr, size, value)
-                    writer.write(struct.pack('<IB', 0, 0))
-                    await writer.drain()
-                    self._access_count += 1
-                    self._addr_counts[addr] = self._addr_counts.get(addr, 0) + 1
-                elif cmd == CMD_CONFIG:
-                    payload = await reader.readexactly(10)
-                    writer.write(struct.pack('<IB', 0, 0))
-                    await writer.drain()
-        except (asyncio.IncompleteReadError, ConnectionResetError, OSError):
-            pass
-        finally:
-            self._writer = None
-            writer.close()
-
-    def _dispatch_read(self, addr, size):
-        periph = self.stm32.find_peripheral(addr)
-        if periph:
-            result = periph.read(addr, size)
-            return result[0] if isinstance(result, tuple) else result
-        return 0
-
-    def _dispatch_write(self, addr, size, value):
-        periph = self.stm32.find_peripheral(addr)
-        if periph:
-            periph.write(addr, size, value)
+            await tcp_server.serve_forever()
 
     def stop(self):
-        if self._loop:
+        if hasattr(self, '_loop') and self._loop:
             self._loop.call_soon_threadsafe(self._loop.stop)
 
 
@@ -294,6 +244,8 @@ def run_e2e_test(verbose=False):
                                                 '..', '..', '..', '..', '..', '..', '..'))
     qemu = os.path.join(project_root, 'build', 'qemu-system-arm')
     firmware = os.path.join(test_dir, 'firmware.bin')
+    board_yaml = os.path.join(project_root, 'slab', 'boards',
+                              'stm32u5a5_sentry_autotest.yaml')
 
     if not os.path.exists(firmware):
         print(f"  ERROR: Firmware not found: {firmware}")
@@ -335,25 +287,39 @@ def run_e2e_test(verbose=False):
     # -- Step 2: Boot sentry firmware in QEMU -------------------------------
     print()
     print("  [2/3] Booting sentry kernel in QEMU...")
-    server = SentryPeripheralServer(periph_port)
+
+    # Build board from YAML config
+    config = load_board_config(board_yaml)
+    board = build_board(config)
+
+    # Wire live UART output
+    board.uart_output = LiveUartBuffer()
+    for p in board.adapter.peripherals:
+        name = getattr(p, 'name', '')
+        if ('USART' in name or 'UART' in name) and hasattr(p, 'on_tx'):
+            def make_handler(buf=board.uart_output):
+                def handler(byte):
+                    buf.append(byte & 0xFF)
+                return handler
+            p.on_tx = make_handler()
+
+    server = SentryBoardServer(board, periph_port)
     server.start_threaded()
-    print(f"         Peripherals: {len(server.stm32.peripherals)}")
+    print(f"         Board    : {config.name}")
+    print(f"         Peripherals: {len(board.adapter.peripherals)}")
+
+    # Build QEMU machine opts from config
+    cpu = get_qemu_cpu(config)
+    clock = get_default_clock(config)
+    machine_opts = f'slab-cortex-m,cpu-type={cpu},tcp-port={periph_port}'
+    if clock:
+        machine_opts += f',sysclk-hz={clock}'
+    for key, val in config.qemu_extra.items():
+        machine_opts += f',{key}={val}'
 
     gdb_port = find_free_port()
-    machine_props = (
-        f"slab-cortex-m"
-        f",cpu-type=cortex-m33"
-        f",tcp-port={periph_port}"
-        f",sram-size=0x270000"
-        f",flash-size=0x400000"
-        f",sysclk-hz=160000000"
-        # STM32U5A5 has 8 MPU regions (QEMU M33 defaults to 16)
-        f",mpu-regions=8"
-        f",periph-base=0x0BFA0000"
-        f",periph-size=0x54060000"
-    )
     qemu_proc = subprocess.Popen(
-        [qemu, '-M', machine_props, '-nographic',
+        [qemu, '-M', machine_opts, '-nographic',
          '-gdb', f'tcp::{gdb_port}', '-kernel', firmware],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
@@ -366,7 +332,7 @@ def run_e2e_test(verbose=False):
     n_prev = 0
     for t in range(15):
         time.sleep(1.0)
-        n = server._access_count
+        n = server.mmio_count
         if t > 4 and n == n_prev:
             break
         n_prev = n
@@ -378,8 +344,8 @@ def run_e2e_test(verbose=False):
     # -- Step 3: Verify boot results ----------------------------------------
     print("  [3/3] Boot verification...")
 
-    uart_text = server.uart_output.decode('ascii', errors='replace')
-    mmio_count = server._access_count
+    uart_text = board.uart_output.decode('ascii', errors='replace')
+    mmio_count = server.mmio_count
 
     # Check kernel reached security init
     boot_ok = "Starting Sentry kernel" in uart_text
@@ -406,8 +372,11 @@ def run_e2e_test(verbose=False):
     print()
     print(f"  Address distribution (top 10):")
     for addr, cnt in sorted_addrs[:10]:
-        periph = server.stm32.find_peripheral(addr)
-        name = periph.name if periph else "UNMAPPED"
+        periph = board.find_peripheral(addr)
+        if periph:
+            name = getattr(periph, 'name', 'UNKNOWN')
+        else:
+            name = "UNMAPPED"
         print(f"    0x{addr:08X} ({name:12s}): {cnt:5d}")
 
     # -- Cleanup ------------------------------------------------------------
