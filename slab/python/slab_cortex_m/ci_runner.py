@@ -549,6 +549,7 @@ class CIRunner:
 
             bridge = ShmPeripheralBridge(shm_name=shm_name)
             bridge.arch_v8m = cpu in ('cortex-m23', 'cortex-m33', 'cortex-m55', 'cortex-m85')
+            bridge.mpu_regions = board_config.mpu_regions
             bridge.create()
             bridge.register_peripheral(handler.base_address, handler)
 

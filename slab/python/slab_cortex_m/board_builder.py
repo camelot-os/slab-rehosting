@@ -146,6 +146,16 @@ def _create_external_device(device_cfg: ExternalDevice):
         log.info(f"Created SSD1306 OLED on {device_cfg.bus}")
         return oled
 
+    elif dtype == 'SDCARD':
+        from slab_cortex_m.virtual_components import VirtualSDCard
+        sdcard = VirtualSDCard(
+            capacity_mb=device_cfg.params.get('capacity_mb', 256),
+            backing_file=device_cfg.params.get('backing_file'),
+            name="SDCard",
+        )
+        log.info(f"Created VirtualSDCard ({sdcard.capacity_mb}MB) on {device_cfg.bus}")
+        return sdcard
+
     elif dtype == 'HIL':
         from slab_cortex_m.hil_peripheral import create_hil_peripheral
         hil_config = dict(device_cfg.params)
@@ -182,6 +192,8 @@ def _wire_device(board: Board, device_cfg: ExternalDevice, device):
         _wire_spi_display(p, device, cls_name, bus_name, dtype)
     elif dtype == 'SSD1306':
         _wire_i2c_display(p, device, cls_name, bus_name, dtype)
+    elif dtype == 'SDCARD':
+        _wire_sdcard(p, device, cls_name, bus_name)
 
 
 def _wire_spi_flash(p, device, cls_name: str, bus_name: str, dtype: str):
@@ -312,6 +324,16 @@ def _wire_i2c_display(p, device, cls_name: str, bus_name: str, dtype: str):
         p.on_read = adapter.on_read
         p.on_stop = adapter.on_stop
         log.info(f"Wired {dtype} to {bus_name} via I2C adapter")
+
+
+def _wire_sdcard(p, device, cls_name: str, bus_name: str):
+    """Wire virtual SD card to an SDMMC controller."""
+    if hasattr(p, 'on_block_read'):
+        p.on_block_read = device.read_blocks
+        p.on_block_write = device.write_blocks
+        log.info(f"Wired SDCard ({device.capacity_mb}MB) to {bus_name}")
+    else:
+        log.warning(f"Cannot wire SDCard to {bus_name}: no on_block_read callback")
 
 
 def _wire_uart(board: Board):

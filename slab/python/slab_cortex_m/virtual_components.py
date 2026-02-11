@@ -1400,6 +1400,183 @@ class SSD1306_OLED(I2CDevice):
 
 
 # =============================================================================
+# SD Card - Virtual SD/SDHC
+# =============================================================================
+
+class VirtualSDCard(VirtualIC):
+    """
+    Virtual SD/SDHC card for use with SDMMC controllers.
+
+    Provides block-level storage with proper CID, CSD, SCR, and OCR
+    register values. Supports file-backed or memory-backed storage.
+
+    Based on SD Physical Layer Simplified Specification v3.01.
+    """
+
+    BLOCK_SIZE = 512
+
+    def __init__(self, capacity_mb: int = 256, backing_file: str = None,
+                 name: str = "SDCard"):
+        super().__init__(name)
+        self.capacity_mb = capacity_mb
+        self._backing_file = backing_file
+        self._total_blocks = capacity_mb * 1024 * 1024 // self.BLOCK_SIZE
+
+        # Memory-backed storage (lazy allocation)
+        self._blocks: Dict[int, bytearray] = {}
+
+        # Card identity
+        self._mid = 0x03        # Manufacturer ID
+        self._oid = b'SD'       # OEM/Application ID
+        self._pnm = b'SL32G'   # Product Name
+        self._prv = 0x80        # Product Revision (8.0)
+        self._psn = 0xDEADBEEF  # Serial Number
+        self._mdt = 0x019A      # Manufacturing Date (Jan 2026)
+
+        # Load backing file if specified
+        if backing_file:
+            self._load_backing_file(backing_file)
+
+    def reset(self) -> None:
+        """Reset card state (does not clear storage)."""
+        pass
+
+    def read_blocks(self, block_addr: int, count: int = 1) -> bytes:
+        """
+        Read one or more 512-byte blocks.
+
+        Args:
+            block_addr: Starting block address (SDHC uses block addressing)
+            count: Number of blocks to read
+
+        Returns:
+            Block data (count * 512 bytes)
+        """
+        result = bytearray()
+        for i in range(count):
+            addr = block_addr + i
+            if addr in self._blocks:
+                result.extend(self._blocks[addr])
+            else:
+                result.extend(b'\x00' * self.BLOCK_SIZE)
+        return bytes(result)
+
+    def write_blocks(self, block_addr: int, data: bytes) -> None:
+        """
+        Write one or more 512-byte blocks.
+
+        Args:
+            block_addr: Starting block address
+            data: Data to write (must be multiple of 512 bytes)
+        """
+        offset = 0
+        while offset < len(data):
+            block = bytearray(data[offset:offset + self.BLOCK_SIZE])
+            if len(block) < self.BLOCK_SIZE:
+                block.extend(b'\x00' * (self.BLOCK_SIZE - len(block)))
+            self._blocks[block_addr] = block
+            block_addr += 1
+            offset += self.BLOCK_SIZE
+
+        # Persist to backing file if configured
+        if self._backing_file:
+            self._save_backing_file(self._backing_file)
+
+    def get_cid(self) -> bytes:
+        """Get 16-byte Card Identification register."""
+        cid = bytearray(16)
+        cid[0] = self._mid
+        cid[1:3] = self._oid
+        cid[3:8] = self._pnm
+        cid[8] = self._prv
+        cid[9] = (self._psn >> 24) & 0xFF
+        cid[10] = (self._psn >> 16) & 0xFF
+        cid[11] = (self._psn >> 8) & 0xFF
+        cid[12] = self._psn & 0xFF
+        cid[13] = (self._mdt >> 8) & 0x0F
+        cid[14] = self._mdt & 0xFF
+        cid[15] = 0x01  # CRC + stop bit
+        return bytes(cid)
+
+    def get_csd(self) -> bytes:
+        """Get 16-byte Card Specific Data register (CSD v2.0 for SDHC)."""
+        c_size = (self.capacity_mb * 1024 // 512) - 1  # In 512KB units
+        csd = bytearray(16)
+        csd[0] = 0x40   # CSD_STRUCTURE=1 (v2.0)
+        csd[1] = 0x0E   # TAAC
+        csd[2] = 0x00   # NSAC
+        csd[3] = 0x5B   # TRAN_SPEED (50MHz)
+        csd[4] = 0x59   # CCC high byte
+        csd[5] = 0x09   # CCC low + READ_BL_LEN=9 (512B)
+        csd[6] = 0x00
+        csd[7] = (c_size >> 16) & 0x3F
+        csd[8] = (c_size >> 8) & 0xFF
+        csd[9] = c_size & 0xFF
+        csd[10] = 0x7F  # ERASE_BLK_EN=1, SECTOR_SIZE
+        csd[11] = 0x80  # SECTOR_SIZE cont, WP_GRP_SIZE
+        csd[12] = 0x0A  # WP_GRP_ENABLE, R2W_FACTOR, WRITE_BL_LEN
+        csd[13] = 0x40  # WRITE_BL_LEN cont
+        csd[14] = 0x00
+        csd[15] = 0x01  # CRC + stop bit
+        return bytes(csd)
+
+    def get_scr(self) -> bytes:
+        """Get 8-byte SD Configuration Register."""
+        return bytes([
+            0x02, 0x35,  # SCR structure 0, SD spec v3, bus widths 1+4
+            0x80, 0x00,  # SD security v2
+            0x00, 0x00, 0x00, 0x00,
+        ])
+
+    def get_ocr(self) -> int:
+        """Get 32-bit Operation Conditions Register."""
+        # SDHC: CCS=1 (bit 30), power up done (bit 31), 3.2-3.4V
+        return 0xC0FF8000
+
+    def get_capacity_bytes(self) -> int:
+        """Get total capacity in bytes."""
+        return self.capacity_mb * 1024 * 1024
+
+    def _load_backing_file(self, path: str) -> None:
+        """Load block data from a backing file."""
+        try:
+            with open(path, 'rb') as f:
+                block_addr = 0
+                while True:
+                    data = f.read(self.BLOCK_SIZE)
+                    if not data:
+                        break
+                    if data != b'\x00' * len(data):
+                        block = bytearray(data)
+                        if len(block) < self.BLOCK_SIZE:
+                            block.extend(b'\x00' * (self.BLOCK_SIZE - len(block)))
+                        self._blocks[block_addr] = block
+                    block_addr += 1
+        except FileNotFoundError:
+            pass
+
+    def _save_backing_file(self, path: str) -> None:
+        """Save block data to backing file."""
+        if not self._blocks:
+            return
+        max_block = max(self._blocks.keys()) + 1
+        with open(path, 'wb') as f:
+            for addr in range(max_block):
+                if addr in self._blocks:
+                    f.write(self._blocks[addr])
+                else:
+                    f.write(b'\x00' * self.BLOCK_SIZE)
+
+    def load_image(self, path: str) -> None:
+        """Load a disk image file (e.g., FAT32 image)."""
+        self._load_backing_file(path)
+
+    def get_used_blocks(self) -> int:
+        """Get number of blocks with data written."""
+        return len(self._blocks)
+
+
+# =============================================================================
 # Factory Functions
 # =============================================================================
 
@@ -1431,6 +1608,11 @@ def create_ili9341(width: int = 240, height: int = 320) -> ILI9341_LCD:
 def create_ssd1306(width: int = 128, height: int = 64) -> SSD1306_OLED:
     """Create SSD1306 OLED controller."""
     return SSD1306_OLED(width, height)
+
+
+def create_sdcard(capacity_mb: int = 256, backing_file: str = None) -> VirtualSDCard:
+    """Create virtual SD card."""
+    return VirtualSDCard(capacity_mb, backing_file)
 
 
 # =============================================================================
