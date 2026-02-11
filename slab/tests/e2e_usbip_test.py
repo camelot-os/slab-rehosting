@@ -2,10 +2,12 @@
 """
 End-to-End USBIP Tests for Multi-Controller USB Support
 
-Tests three USB controller architectures:
+Tests five USB controller configurations:
 1. F405 -- DWC2 OTG FS (baseline, existing)
-2. WB55 -- PMA-based USB FS (new)
-3. RP2040 -- Custom USB + DPRAM (infrastructure only, no USB firmware)
+2. WB55 -- PMA-based USB FS
+3. F103 BluePill -- PMA-based USB FS
+4. F411 BlackPill -- DWC2 OTG FS
+5. RP2040 -- Custom USB + DPRAM (infrastructure + bootrom firmware)
 
 Captures full server + QEMU logs for report generation.
 
@@ -867,24 +869,54 @@ def main():
     )
     results.append(r2)
 
-    # Test 3: RP2040 infrastructure (Python-only)
-    print(f"\n[Test 3/4] RP2040 USB Infrastructure (Python-only)")
-    print(f"  No firmware -- testing DPRAM + inject methods")
-    r3 = test_rp2040_infrastructure()
+    # Test 3: F103 BluePill PMA USB FS
+    print(f"\n[Test 3/6] F103 BluePill PMA USB FS")
+    print(f"  Board: stm32f103_cdc_blinky.yaml")
+    print(f"  Firmware: F103_CDC_Blinky.bin (USB CDC)")
+    r3 = run_e2e_test(
+        name="f103_pma",
+        board_yaml=BOARDS_DIR / "stm32f103_cdc_blinky.yaml",
+        firmware_bin=PROJECT_ROOT / "slab/examples/cortex-m/stm32/f103/demos/cdc_blinky/build/F103_CDC_Blinky.bin",
+        tcp_port=5564,
+        usbip_port=3245,
+        usb_type="usb_fs_pma",
+        platform="STM32F103",
+    )
     results.append(r3)
 
-    # Test 4: RP2040 bootrom firmware-in-the-loop USBIP
+    # Test 4: F411 BlackPill DWC2 OTG FS
+    print(f"\n[Test 4/6] F411 BlackPill DWC2 OTG FS")
+    print(f"  Board: stm32f411_cdc_blinky.yaml")
+    print(f"  Firmware: F411_CDC_Blinky.bin (USB CDC)")
+    r4 = run_e2e_test(
+        name="f411_dwc2",
+        board_yaml=BOARDS_DIR / "stm32f411_cdc_blinky.yaml",
+        firmware_bin=PROJECT_ROOT / "slab/examples/cortex-m/stm32/f411/demos/cdc_blinky/build/F411_CDC_Blinky.bin",
+        tcp_port=5565,
+        usbip_port=3246,
+        usb_type="dwc2_otg_fs",
+        platform="STM32F411",
+    )
+    results.append(r4)
+
+    # Test 5: RP2040 infrastructure (Python-only)
+    print(f"\n[Test 5/6] RP2040 USB Infrastructure (Python-only)")
+    print(f"  No firmware -- testing DPRAM + inject methods")
+    r5 = test_rp2040_infrastructure()
+    results.append(r5)
+
+    # Test 6: RP2040 bootrom firmware-in-the-loop USBIP
     bootrom_bin = PROJECT_ROOT / "slab" / "roms" / "rp2040_b2.bin"
-    print(f"\n[Test 4/4] RP2040 Bootrom USBIP (firmware-in-the-loop)")
+    print(f"\n[Test 6/6] RP2040 Bootrom USBIP (firmware-in-the-loop)")
     if bootrom_bin.exists():
         print(f"  Bootrom: {bootrom_bin}")
-        r4 = test_rp2040_bootrom_usbip()
+        r6 = test_rp2040_bootrom_usbip()
     else:
         print(f"  SKIP: bootrom not found")
-        r4 = E2ETestResult(
+        r6 = E2ETestResult(
             name="rp2040_bootrom", platform="RP2040", usb_type="bootrom_fw")
-        r4.error = "bootrom binary not found (run slab/scripts/download_rp2040_bootrom.sh)"
-    results.append(r4)
+        r6.error = "bootrom binary not found (run slab/scripts/download_rp2040_bootrom.sh)"
+    results.append(r6)
 
     # Report
     print_report(results)

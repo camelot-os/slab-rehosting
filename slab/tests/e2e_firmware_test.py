@@ -620,6 +620,38 @@ def build_test_cases() -> List[TestCase]:
         timeout=6, expect_mmio=3,
     ))
 
+    # -- STM32F103 BluePill CDC Blinky (Cortex-M3, USB FS PMA) --
+    tests.append(TestCase(
+        name="STM32F103 CDC Blinky [board]",
+        firmware="slab/examples/cortex-m/stm32/f103/demos/cdc_blinky/build/F103_CDC_Blinky.bin",
+        cpu="cortex-m3", mode="board",
+        board_yaml="slab/boards/stm32f103_cdc_blinky.yaml",
+        timeout=8, expect_mmio=50,
+    ))
+
+    tests.append(TestCase(
+        name="STM32F103 CDC Blinky [direct]",
+        firmware="slab/examples/cortex-m/stm32/f103/demos/cdc_blinky/build/F103_CDC_Blinky.bin",
+        cpu="cortex-m3", mode="direct", mcu="STM32F103",
+        timeout=8, expect_mmio=50,
+    ))
+
+    # -- STM32F411 BlackPill CDC Blinky (Cortex-M4, DWC2 OTG FS) --
+    tests.append(TestCase(
+        name="STM32F411 CDC Blinky [board]",
+        firmware="slab/examples/cortex-m/stm32/f411/demos/cdc_blinky/build/F411_CDC_Blinky.bin",
+        cpu="cortex-m4", mode="board",
+        board_yaml="slab/boards/stm32f411_cdc_blinky.yaml",
+        timeout=8, expect_mmio=50,
+    ))
+
+    tests.append(TestCase(
+        name="STM32F411 CDC Blinky [direct]",
+        firmware="slab/examples/cortex-m/stm32/f411/demos/cdc_blinky/build/F411_CDC_Blinky.bin",
+        cpu="cortex-m4", mode="direct", mcu="STM32F411",
+        timeout=8, expect_mmio=50,
+    ))
+
     # -- Benchmarks (use peripheral test registers at 0x50000000) --
     for cpu_variant, cpu_type in [
         ("m0", "cortex-m0"), ("m3", "cortex-m3"),
