@@ -63,6 +63,11 @@ class BoardConfig:
     patches: List[PatchEntry] = field(default_factory=list)    # Firmware binary patches
     svd_path: str = ""                           # SVD file path (set when mcu starts with SVD:)
 
+    @property
+    def mpu_regions(self) -> int:
+        """Number of MPU regions from qemu_extra, default 8."""
+        return int(self.qemu_extra.get('mpu-regions', '8'))
+
 
 # Known MCU -> (package, PeripheralSet class, default QEMU CPU, default clock)
 MCU_REGISTRY: Dict[str, tuple] = {
@@ -77,6 +82,7 @@ MCU_REGISTRY: Dict[str, tuple] = {
     "STM32H563":  ("slab_stm32", "STM32H563PeripheralSet",  "cortex-m33", 250_000_000),
     "STM32H745":  ("slab_stm32", "STM32H7xxPeripheralSet",  "cortex-m7", 480_000_000),
     "STM32U5A5":  ("slab_stm32", "STM32U5A5PeripheralSet",  "cortex-m33", 160_000_000),
+    "STM32U5A9":  ("slab_stm32", "STM32U5A9PeripheralSet",  "cortex-m33", 160_000_000),
     "STM32U585":  ("slab_stm32", "STM32U585PeripheralSet",  "cortex-m33", 160_000_000),
     "STM32WB55":  ("slab_stm32", "STM32WB55PeripheralSet",  "cortex-m4",  64_000_000),
     "STM32WB35":  ("slab_stm32", "STM32WB35PeripheralSet",  "cortex-m4",  64_000_000),

@@ -177,8 +177,13 @@ from .stm32wbxx import (
     STM32AES,         # AES hardware accelerator
 )
 
+from .stm32_sdmmc import STM32SDMMC
+from .stm32_ltdc import STM32LTDC
+from .stm32_dsi import STM32DSI
+
 from .stm32u5xx import (
     STM32U5A5PeripheralSet,
+    STM32U5A9PeripheralSet,
     STM32U575PeripheralSet,
     STM32U585PeripheralSet,
     STM32U5xxPeripheralSet,
@@ -291,6 +296,7 @@ __all__ = [
     "STM32AES",
     # U5xx (TrustZone)
     "STM32U5A5PeripheralSet",
+    "STM32U5A9PeripheralSet",
     "STM32U575PeripheralSet",
     "STM32U585PeripheralSet",
     "STM32U5xxPeripheralSet",
@@ -299,4 +305,8 @@ __all__ = [
     "STM32TAMP",
     "STM32SAES",
     "STM32HASH",
+    # SDMMC / Display
+    "STM32SDMMC",
+    "STM32LTDC",
+    "STM32DSI",
 ]

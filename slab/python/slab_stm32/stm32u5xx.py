@@ -25,6 +25,7 @@ from .stm32_spi import STM32SPIv2
 from .stm32_i2c import STM32I2Cv2
 from .stm32_rcc import STM32RCCv5
 from .stm32_dma import STM32GPDMA
+from .stm32_sdmmc import STM32SDMMC
 from .stm32_timers import STM32BasicTimer, STM32GeneralTimer, STM32AdvancedTimer, STM32LPTIM
 from .stm32_adc import STM32ADCv3
 from .stm32_dac import STM32DAC
@@ -730,6 +731,7 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
         self._create_timers()
         self._create_analog()
         self._create_dma()
+        self._create_sdmmc()
         self._create_usb()
         self._create_security()
         self._create_misc()
@@ -873,6 +875,13 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
         self.lpdma = STM32GPDMA(name="LPDMA1", base=0x46025000, num_channels=4)
         self.add_peripheral(self.lpdma)
 
+    def _create_sdmmc(self):
+        """Create SDMMC controllers."""
+        self.sdmmc1 = STM32SDMMC(index=1, base=0x420C8000, irq=78)
+        self.sdmmc2 = STM32SDMMC(index=2, base=0x420C8C00, irq=79)
+        self.add_peripheral(self.sdmmc1)
+        self.add_peripheral(self.sdmmc2)
+
     def _create_security(self):
         """Create TrustZone and crypto peripherals."""
         # GTZC (Global TrustZone Controller)
@@ -975,3 +984,29 @@ class STM32U585PeripheralSet(STM32U575PeripheralSet):
     def __init__(self, log: logging.Logger = None):
         super().__init__(log=log)
         self.device = "STM32U585"
+
+
+class STM32U5A9PeripheralSet(STM32U5A5PeripheralSet):
+    """
+    STM32U5A9 peripheral set (U5A5 + DSI + LTDC).
+
+    Additional features over U5A5:
+    - MIPI DSI Host controller
+    - LTDC (LCD-TFT Display Controller)
+    - Same SDMMC1/2, USB OTG HS, TrustZone as U5A5
+    """
+
+    def __init__(self, log: logging.Logger = None):
+        super().__init__(log=log)
+        self.device = "STM32U5A9"
+        self._create_display()
+
+    def _create_display(self):
+        """Create DSI and LTDC display peripherals."""
+        from .stm32_ltdc import STM32LTDC
+        from .stm32_dsi import STM32DSI
+
+        self.ltdc = STM32LTDC(base=0x40016800, irq=135, irq_err=136)
+        self.dsi = STM32DSI(base=0x40016C00, irq=137)
+        self.add_peripheral(self.ltdc)
+        self.add_peripheral(self.dsi)

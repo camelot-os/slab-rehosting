@@ -1,0 +1,21 @@
+name: STM32U5A9_Display
+mcu: STM32U5A9
+clock: 160000000
+qemu_extra:
+  flash-size: "0x400000"
+  sram-size: "0x280000"
+  enable-bitband: "false"
+  mpu-regions: "8"
+  periph-base: "0x0BFA0000"
+  periph-size: "0x54060000"
+leds:
+  - name: LD1_Green
+    port: GPIOC
+    pin: 7
+  - name: LD2_Blue
+    port: GPIOB
+    pin: 7
+external_devices:
+  - type: SDCard
+    bus: SDMMC1
+    params: {capacity_mb: 256}
