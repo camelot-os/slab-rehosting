@@ -1,0 +1,11 @@
+name: STM32F103_CDC_Blinky
+mcu: STM32F103
+clock: 72000000
+usb:
+  type: usb_fs_pma
+  base: 0x40005C00
+  irq: 20
+external_devices:
+  - type: LED
+    bus: GPIOC
+    params: {pin: 13, color: green}
