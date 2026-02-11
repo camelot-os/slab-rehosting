@@ -1,0 +1,11 @@
+name: STM32F411_CDC_Blinky
+mcu: STM32F411
+clock: 100000000
+usb:
+  type: dwc2_otg_fs
+  base: 0x50000000
+  irq: 67
+external_devices:
+  - type: LED
+    bus: GPIOC
+    params: {pin: 13, color: blue}
