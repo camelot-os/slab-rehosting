@@ -139,6 +139,7 @@ from .stm32f1xx import (
 from .stm32f4xx import (
     STM32F405PeripheralSet,
     STM32F407PeripheralSet,
+    STM32F411PeripheralSet,
     STM32F429PeripheralSet,
     STM32F439PeripheralSet,
     STM32F4xxPeripheralSet,
@@ -263,6 +264,7 @@ __all__ = [
     # F4xx
     "STM32F405PeripheralSet",
     "STM32F407PeripheralSet",
+    "STM32F411PeripheralSet",
     "STM32F429PeripheralSet",
     "STM32F439PeripheralSet",
     "STM32F4xxPeripheralSet",

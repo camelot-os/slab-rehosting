@@ -284,6 +284,20 @@ class STM32F439PeripheralSet(STM32F429PeripheralSet):
         self.add_peripheral(self.hash)
 
 
+class STM32F411PeripheralSet(STM32F4xxPeripheralSet):
+    """
+    STM32F411 (BlackPill) peripheral set.
+
+    Features:
+    - 100 MHz
+    - USB OTG FS
+    - No Ethernet, no crypto
+    """
+
+    def __init__(self, log: logging.Logger = None):
+        super().__init__(device="STM32F411", log=log)
+
+
 class STM32F446PeripheralSet(STM32F4xxPeripheralSet):
     """
     STM32F446 peripheral set.
