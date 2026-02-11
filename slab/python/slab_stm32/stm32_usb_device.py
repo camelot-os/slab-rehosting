@@ -426,9 +426,18 @@ class STM32USBDevice(STM32Peripheral):
         self._epr[ep] = new
         self.log.debug(f"EP{ep}: STAT_TX={state.tx_status}, STAT_RX={state.rx_status}")
 
+        # Recompute ISTR.CTR from all endpoint CTR flags (hardware does this)
+        self._update_istr_ctr()
+
         # USBIP hook: detect when firmware arms EP0 TX (STAT_TX -> VALID)
-        if ep == 0 and state.tx_status == EPStatBits.VALID and self._ep0_event:
-            self._handle_ep0_tx_ready()
+        if ep == 0 and state.tx_status == EPStatBits.VALID and self.connected:
+            if self._ep0_event:
+                self._handle_ep0_tx_ready()
+            else:
+                # Auto-consume STATUS ZLP for OUT control transfers.
+                # On real hardware the host sends an IN token; here we
+                # simulate the transfer completing immediately.
+                self._auto_consume_ep0_tx()
 
     def _write_cntr(self, value: int):
         """Write USB_CNTR register."""
@@ -453,6 +462,42 @@ class STM32USBDevice(STM32Peripheral):
         # Only clear bits that are written as 0
         clear_mask = ~value & 0xFF80  # Only interrupt flags (bits 7-15)
         self._istr &= ~clear_mask
+        self._update_irq_level()
+
+    def _update_istr_ctr(self):
+        """Recompute ISTR.CTR, EP_ID, and DIR from endpoint CTR flags.
+
+        On real STM32 hardware, ISTR.CTR reflects the OR of all endpoint
+        CTR_TX/CTR_RX flags.  EP_ID points to the lowest-numbered endpoint
+        with a pending CTR, and DIR indicates the direction.  When no
+        endpoint has a pending CTR, the CTR bit is cleared.
+        """
+        for i, ep in enumerate(self.endpoints):
+            if ep.ctr_rx:
+                # OUT / SETUP direction
+                self._istr = (self._istr & ~0x001F) | i | (1 << USBIstrBits.DIR)
+                self._istr |= (1 << USBIstrBits.CTR)
+                return
+            if ep.ctr_tx:
+                # IN direction
+                self._istr = (self._istr & ~0x001F) | i
+                self._istr |= (1 << USBIstrBits.CTR)
+                return
+        # No pending CTR on any endpoint
+        self._istr &= ~(1 << USBIstrBits.CTR)
+        self._update_irq_level()
+
+    def _update_irq_level(self):
+        """Deassert IRQ when no masked interrupt flags remain in ISTR.
+
+        On real STM32, the USB IRQ line is the OR of all (ISTR flag & CNTR mask)
+        pairs.  We must deassert when all flags are cleared so the NVIC
+        (level-triggered) stops re-entering the ISR.
+        """
+        # Map ISTR flag bits to their CNTR mask bits (same bit positions 8-15)
+        masked = self._istr & self._cntr & 0xFF00
+        if not masked:
+            self.trigger_irq(0)
 
     def _reset_endpoints(self):
         """Reset all endpoints to default state."""
@@ -747,7 +792,8 @@ class STM32USBDevice(STM32Peripheral):
         state.ctr_tx = True
         state.tx_status = EPStatBits.NAK
 
-        self._istr = (self._istr & ~0x001F) | (1 << USBIstrBits.DIR)
+        # DIR=0 for IN (device-to-host), EP_ID=0
+        self._istr = (self._istr & ~0x001F)  # Clear EP_ID + DIR (DIR=0 = IN)
         self._istr |= (1 << USBIstrBits.CTR)
         if self._cntr & (1 << USBCntrBits.CTRM):
             self.trigger_irq()
@@ -757,6 +803,30 @@ class STM32USBDevice(STM32Peripheral):
             self._ep0_response = bytes(self._ep0_accum[:self._ep0_expected])
             self.log.info(f"EP0 IN complete: {len(self._ep0_response)} bytes")
             self._ep0_event.set()
+
+    def _auto_consume_ep0_tx(self):
+        """Auto-consume EP0 TX (STATUS ZLP) for OUT control transfers.
+
+        On real hardware the host sends an IN token after an OUT control
+        transfer to complete the status phase.  In our emulation, OUT
+        control requests (SET_ADDRESS, SET_CONFIGURATION, etc.) don't go
+        through wait_ep0_response(), so the STATUS ZLP sits unconsumed.
+        The F1 HAL defers address setup to the CTR_TX ISR (line 2230 of
+        stm32f1xx_hal_pcd.c), so we must complete this transfer.
+        """
+        state = self.endpoints[0]
+
+        # Simulate IN transfer completing: CTR_TX=1, STAT_TX -> NAK
+        state.ctr_tx = True
+        state.tx_status = EPStatBits.NAK
+
+        # DIR=0 for IN (device-to-host), EP_ID=0
+        self._istr = (self._istr & ~0x001F)
+        self._istr |= (1 << USBIstrBits.CTR)
+        if self._cntr & (1 << USBCntrBits.CTRM):
+            self.trigger_irq()
+
+        self.log.debug("Auto-consumed EP0 STATUS ZLP")
 
     async def wait_ep0_response(self, timeout: float = 5.0) -> bytes:
         """Wait for firmware to complete EP0 IN transfer.
