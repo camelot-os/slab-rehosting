@@ -942,6 +942,15 @@ class LogicAnalyzerPro:
         self.drag_start_x = 0
         self.drag_start_offset = 0.0
 
+        # Console state
+        self.console_input = None  # InputField, created in init_fonts
+        self.console_output = []   # List of (str, float) — message + timestamp
+        self.console_visible = False
+        self.console_history = []  # Past commands
+        self.history_index = -1
+        self.visible_channels = None  # None = all, set() = filtered
+        self.markers = []  # List of (float, str) — time + label
+
     @property
     def time_scale(self) -> float:
         return self.ZOOM_LEVELS[self.zoom_index]
@@ -950,6 +959,27 @@ class LogicAnalyzerPro:
         if PYGAME_AVAILABLE and self.font is None:
             self.font = pygame.font.Font(None, 16)
             self.small_font = pygame.font.Font(None, 14)
+        if PYGAME_AVAILABLE and self.console_input is None:
+            self.console_input = InputField(
+                self.x + 2, self.y + self.height - 26,
+                self.width - 4, 24)
+            self.console_input.placeholder = "> command... (/help)"
+            self.console_input.on_submit = self._handle_command
+
+    def toggle_console(self):
+        """Toggle console visibility."""
+        self.console_visible = not self.console_visible
+        if self.console_visible and self.console_input:
+            self.console_input.focused = True
+        elif self.console_input:
+            self.console_input.focused = False
+
+    def _console_output_add(self, msg: str):
+        """Add a message to the console output overlay."""
+        self.console_output.append((msg, time.time()))
+        # Keep last 10 messages
+        if len(self.console_output) > 10:
+            self.console_output = self.console_output[-10:]
 
     def zoom_in(self):
         if self.zoom_index > 0:
@@ -969,6 +999,177 @@ class LogicAnalyzerPro:
 
     def toggle_auto_scroll(self):
         self.auto_scroll = not self.auto_scroll
+
+    def _handle_command(self, text: str):
+        """Parse and execute a console command."""
+        text = text.strip()
+        if not text:
+            return
+
+        # Save to history
+        self.console_history.append(text)
+        self.history_index = -1
+
+        parts = text.split(None, 1)
+        cmd = parts[0].lower()
+        args = parts[1] if len(parts) > 1 else ""
+
+        if cmd == "help":
+            self._console_output_add("Commands: zoom goto auto measure stats export clear show mark help")
+
+        elif cmd == "zoom":
+            self._cmd_zoom(args)
+
+        elif cmd == "goto":
+            self._cmd_goto(args)
+
+        elif cmd == "auto":
+            self.auto_scroll = not self.auto_scroll
+            self._console_output_add(f"Auto-scroll: {'ON' if self.auto_scroll else 'OFF'}")
+
+        elif cmd == "measure":
+            self._cmd_measure(args)
+
+        elif cmd == "stats":
+            self._cmd_stats()
+
+        elif cmd == "export":
+            self._cmd_export(args)
+
+        elif cmd == "clear":
+            for ch in self.capture.channels.values():
+                ch.clear()
+            self.markers.clear()
+            self._console_output_add("Capture cleared")
+
+        elif cmd == "show":
+            self._cmd_show(args)
+
+        elif cmd == "mark":
+            view_center = self.time_offset + self.time_scale / 2
+            label = args.strip('"\'') if args else f"M{len(self.markers)}"
+            self.markers.append((view_center, label))
+            self._console_output_add(f"Marker '{label}' at {view_center:.3f}s")
+
+        else:
+            self._console_output_add(f"Unknown command: {cmd}")
+
+    def _cmd_zoom(self, args: str):
+        """Handle zoom command: zoom 100ms, zoom 2s."""
+        import re
+        m = re.match(r'(\d+(?:\.\d+)?)\s*(ms|s)', args.strip())
+        if not m:
+            self._console_output_add("Usage: zoom <value><ms|s>  (e.g. zoom 200ms)")
+            return
+        val = float(m.group(1))
+        unit = m.group(2)
+        target = val / 1000.0 if unit == "ms" else val
+
+        # Find closest zoom level
+        best = min(range(len(self.ZOOM_LEVELS)),
+                   key=lambda i: abs(self.ZOOM_LEVELS[i] - target))
+        self.zoom_index = best
+        self._console_output_add(f"Zoom: {self.ZOOM_LEVELS[best]*1000:.0f}ms/div")
+
+    def _cmd_goto(self, args: str):
+        """Handle goto command: goto 5.2s, goto 800ms."""
+        import re
+        m = re.match(r'(\d+(?:\.\d+)?)\s*(ms|s)?', args.strip())
+        if not m:
+            self._console_output_add("Usage: goto <time><ms|s>  (e.g. goto 3s)")
+            return
+        val = float(m.group(1))
+        unit = m.group(2) or "s"
+        target = val / 1000.0 if unit == "ms" else val
+        self.time_offset = max(0, target - self.time_scale / 2)
+        self.auto_scroll = False
+        self._console_output_add(f"View at {target:.3f}s")
+
+    def _cmd_measure(self, args: str):
+        """Handle measure command: measure GP25."""
+        ch_name = args.strip()
+        channel = self.capture.channels.get(ch_name)
+        if not channel:
+            names = ", ".join(self.capture.channels.keys())
+            self._console_output_add(f"Channel '{ch_name}' not found. Available: {names}")
+            return
+
+        n = len(channel.transitions)
+        if n == 0:
+            self._console_output_add(f"{ch_name}: no transitions")
+            return
+
+        # Compute statistics
+        rising = [t for t in channel.transitions if t.value == 1]
+        falling = [t for t in channel.transitions if t.value == 0]
+
+        # Frequency from rising edges
+        freq_str = "N/A"
+        if len(rising) >= 2:
+            periods = [rising[i+1].timestamp - rising[i].timestamp
+                       for i in range(len(rising)-1)]
+            avg_period = sum(periods) / len(periods)
+            if avg_period > 0:
+                freq_str = f"{1.0/avg_period:.1f}Hz"
+
+        # Duty cycle
+        duty_str = "N/A"
+        if rising and falling:
+            time_high = 0.0
+            for r in rising:
+                # Find next falling after this rising
+                next_fall = next((f for f in falling if f.timestamp > r.timestamp), None)
+                if next_fall:
+                    time_high += next_fall.timestamp - r.timestamp
+            total = channel.transitions[-1].timestamp - channel.transitions[0].timestamp
+            if total > 0:
+                duty_str = f"{100*time_high/total:.0f}%"
+
+        span = channel.transitions[-1].timestamp - channel.transitions[0].timestamp
+        self._console_output_add(
+            f"{ch_name}: {n} transitions, freq={freq_str}, duty={duty_str}, span={span:.3f}s")
+
+    def _cmd_stats(self):
+        """Show summary statistics for all channels."""
+        if not self.capture.channels:
+            self._console_output_add("No channels")
+            return
+        lines = []
+        for name, ch in self.capture.channels.items():
+            n = len(ch.transitions)
+            val = ch.current_value
+            lines.append(f"{name}:{n}t v={val}")
+        self._console_output_add(" | ".join(lines))
+
+    def _cmd_export(self, args: str):
+        """Handle export command: export vcd, export csv, export sr."""
+        fmt = args.strip().lower()
+        basename = "/tmp/slab_capture"
+        if fmt == "vcd":
+            self.capture.export_vcd(f"{basename}.vcd")
+            self._console_output_add(f"Exported {basename}.vcd")
+        elif fmt == "csv":
+            self.capture.export_csv(f"{basename}.csv")
+            self._console_output_add(f"Exported {basename}.csv")
+        elif fmt in ("sr", "sigrok"):
+            self.capture.export_sigrok(f"{basename}.sr")
+            self._console_output_add(f"Exported {basename}.sr")
+        else:
+            self._console_output_add("Usage: export <vcd|csv|sr>")
+
+    def _cmd_show(self, args: str):
+        """Handle show command: show GP25,GP1 or show all."""
+        if args.strip().lower() == "all":
+            self.visible_channels = None
+            self._console_output_add("Showing all channels")
+        else:
+            names = {n.strip() for n in args.split(",")}
+            valid = names & set(self.capture.channels.keys())
+            if not valid:
+                self._console_output_add(f"No matching channels. Available: {', '.join(self.capture.channels.keys())}")
+                return
+            self.visible_channels = valid
+            self._console_output_add(f"Showing: {', '.join(sorted(valid))}")
 
     def handle_event(self, event: 'pygame.event.Event') -> bool:
         if not PYGAME_AVAILABLE:
