@@ -97,7 +97,7 @@ Use SVD to understand the register bits:
    from svd_parser import SVDParser
 
    parser = SVDParser()
-   device = parser.parse("svd/data/STMicro/STM32F405.svd")
+   device = parser.parse("cmsis-svd/data/STMicro/STM32F405.svd")
 
    # Find RCC peripheral
    rcc = next(p for p in device.peripherals if p.name == 'RCC')

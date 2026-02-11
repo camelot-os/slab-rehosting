@@ -31,10 +31,9 @@ First, identify the target MCU and obtain its SVD (System View Description) file
 
 .. code-block:: bash
 
-   # SVD files are in the svd/data directory
-   ls svd/data/STMicro/STM32F4*.svd
-
-   # STM32F405.svd contains register definitions for our target
+   # Clone the cmsis-svd community repository for SVD files
+   git clone https://github.com/posborne/cmsis-svd.git
+   ls cmsis-svd/data/STMicro/STM32F4*.svd
 
 Parse the SVD to understand the peripheral layout:
 
@@ -43,7 +42,7 @@ Parse the SVD to understand the peripheral layout:
    from svd_parser import SVDParser
 
    parser = SVDParser()
-   device = parser.parse("svd/data/STMicro/STM32F405.svd")
+   device = parser.parse("cmsis-svd/data/STMicro/STM32F405.svd")
 
    print(f"Device: {device.name}")
    print(f"Peripherals: {len(device.peripherals)}")
