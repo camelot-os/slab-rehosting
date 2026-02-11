@@ -1,0 +1,112 @@
+% Adding a New SoC — 10-Step Workflow Diagram
+%
+% Compile with: pdflatex soc_workflow.tex
+% Convert to PNG: pdftoppm -png -r 200 soc_workflow.pdf soc_workflow
+%
+% Author: Mathieu Renard <mathieu.renard@twistedwires.io>
+% Copyright (C) 2026 Twisted Wires Security Lab
+% SPDX-License-Identifier: Apache-2.0
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc,decorations.pathreplacing}
+
+\begin{document}
+
+\definecolor{trustzoneblue}{RGB}{0,123,255}
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{mcugray}{RGB}{100,100,100}
+\definecolor{spiblue}{RGB}{0,102,204}
+\definecolor{uartgreen}{RGB}{39,174,96}
+\definecolor{i2corange}{RGB}{230,126,34}
+
+\begin{tikzpicture}[
+    wfstep/.style={draw, rounded corners=4pt, minimum width=4.5cm, minimum height=1cm,
+                 align=center, font=\small, thick},
+    arrow/.style={-{Stealth[length=2.5mm]}, thick, mcugray},
+    phase/.style={font=\small\bfseries, text=white, fill=#1, rounded corners=3pt,
+                  minimum width=2cm, minimum height=0.6cm, align=center},
+]
+
+% Phase labels (left column)
+\node[phase=spiblue] (p1) at (-4, 0) {Discovery};
+\node[phase=i2corange] (p2) at (-4, -4.5) {Implementation};
+\node[phase=securegreen] (p3) at (-4, -10) {Integration};
+\node[phase=trustzoneblue] (p4) at (-4, -13.5) {Validation};
+
+% Step 1: Obtain SVD
+\node[wfstep, fill=spiblue!12] (s1) at (2, 0.8) {1. Obtain SVD File\\{\tiny ST, NXP, Nordic, RP vendor packs}};
+
+% Step 2: Parse SVD
+\node[wfstep, fill=spiblue!12] (s2) at (2, -0.8) {2. Parse SVD\\{\tiny \texttt{svd\_parser.py --peripheral RCC}}};
+
+% Step 3: Generate Skeletons
+\node[wfstep, fill=i2corange!12] (s3) at (2, -2.8) {3. Generate Skeletons\\{\tiny \texttt{svd\_to\_peripheral.py SPI1}}};
+
+% Step 4: Implement Peripherals
+\node[wfstep, fill=i2corange!12] (s4) at (2, -4.5) {4. Implement Peripheral Classes\\{\tiny RCC, GPIO, USART, SPI, I2C, \ldots}};
+
+% Step 5: Create PeripheralSet
+\node[wfstep, fill=i2corange!12] (s5) at (2, -6.2) {5. Create PeripheralSet\\{\tiny \texttt{class MyMCUPeripheralSet}}};
+
+% Step 6: Register MCU
+\node[wfstep, fill=securegreen!12] (s6) at (2, -8.2) {6. Register in MCU\_REGISTRY\\{\tiny One line in \texttt{board.py}}};
+
+% Step 7: Update Adapter
+\node[wfstep, fill=securegreen!12] (s7) at (2, -9.8) {7. Update Peripheral Adapter\\{\tiny New family: \texttt{\_detect\_family()}}};
+
+% Step 8: Board YAML
+\node[wfstep, fill=securegreen!12] (s8) at (2, -11.4) {8. Create Board YAML\\{\tiny MCU, clock, external devices}};
+
+% Step 9: Manual Test
+\node[wfstep, fill=trustzoneblue!12] (s9) at (2, -13) {9. Test Manually\\{\tiny Server + QEMU two-terminal}};
+
+% Step 10: CI Scenario
+\node[wfstep, fill=trustzoneblue!12] (s10) at (2, -14.6) {10. Write CI Scenario\\{\tiny Assertions: no\_crash, mmio\_count}};
+
+% Arrows
+\draw[arrow] (s1) -- (s2);
+\draw[arrow] (s2) -- (s3);
+\draw[arrow] (s3) -- (s4);
+\draw[arrow] (s4) -- (s5);
+\draw[arrow] (s5) -- (s6);
+\draw[arrow] (s6) -- (s7);
+\draw[arrow] (s7) -- (s8);
+\draw[arrow] (s8) -- (s9);
+\draw[arrow] (s9) -- (s10);
+
+% Skip arrow for existing families
+\draw[arrow, dashed, trustzoneblue] (s6.east) -- ++(2,0) node[midway, right, font=\tiny, text=trustzoneblue] {Existing family?\\Skip step 7} |- (s8.east);
+
+% Phase grouping brackets
+\draw[thick, spiblue, decorate, decoration={brace, amplitude=5pt}]
+    (-1.8, 1.3) -- (-1.8, -1.3) ;
+\draw[thick, i2corange, decorate, decoration={brace, amplitude=5pt}]
+    (-1.8, -2.3) -- (-1.8, -6.7) ;
+\draw[thick, securegreen, decorate, decoration={brace, amplitude=5pt}]
+    (-1.8, -7.7) -- (-1.8, -11.9) ;
+\draw[thick, trustzoneblue, decorate, decoration={brace, amplitude=5pt}]
+    (-1.8, -12.5) -- (-1.8, -15.1) ;
+
+% Output artifacts (right side)
+\node[draw, dashed, rounded corners=3pt, fill=mcugray!8, font=\tiny, align=center,
+      minimum width=3cm] (out1) at (7.5, -4.5)
+    {Output Files\\[2pt]\texttt{slab\_myvendor/}\\
+     \texttt{my\_rcc.py}\\
+     \texttt{my\_gpio.py}\\
+     \texttt{my\_spi.py}\\
+     \texttt{my\_peripherals.py}};
+
+\node[draw, dashed, rounded corners=3pt, fill=mcugray!8, font=\tiny, align=center,
+      minimum width=3cm] (out2) at (7.5, -11.4)
+    {Config Files\\[2pt]\texttt{slab/boards/}\\
+     \texttt{my\_board.yaml}\\
+     \texttt{slab/ci/}\\
+     \texttt{test\_my\_board.yaml}};
+
+\draw[dashed, mcugray, -{Stealth[length=2mm]}] (s5.east) -- (out1.west);
+\draw[dashed, mcugray, -{Stealth[length=2mm]}] (s8.east) -- (out2.west);
+
+\end{tikzpicture}
+
+\end{document}

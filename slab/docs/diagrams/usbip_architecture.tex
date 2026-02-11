@@ -1,0 +1,148 @@
+% USBIP Architecture — Firmware-in-the-Loop Data Flow
+%
+% Shows the complete path from host USB tools through USBIP protocol
+% to the emulated USB controller peripheral and firmware running in QEMU.
+%
+% Compile with: pdflatex usbip_architecture.tex
+% Convert to PNG: pdftoppm -png -r 200 usbip_architecture.pdf usbip_architecture
+%
+% Author: Mathieu Renard <mathieu.renard@twistedwires.io>
+% Copyright (C) 2026 Twisted Wires Security Lab
+% SPDX-License-Identifier: Apache-2.0
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc}
+
+\begin{document}
+
+\definecolor{trustzoneblue}{RGB}{0,123,255}
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{nsred}{RGB}{220,53,69}
+\definecolor{mcugray}{RGB}{100,100,100}
+\definecolor{uartgreen}{RGB}{39,174,96}
+\definecolor{spiblue}{RGB}{0,102,204}
+
+\begin{tikzpicture}[
+    box/.style={draw, rounded corners=5pt, minimum width=3.5cm, minimum height=1.4cm,
+                align=center, font=\small, thick},
+    smallbox/.style={draw, rounded corners=3pt, minimum width=2.8cm, minimum height=0.8cm,
+                     align=center, font=\footnotesize},
+    arrow/.style={-{Stealth[length=3mm]}, thick},
+    doublearrow/.style={{Stealth[length=2.5mm]}-{Stealth[length=2.5mm]}, thick},
+    label/.style={font=\footnotesize\itshape, text=mcugray},
+]
+
+% =====================================================================
+% HOST SIDE (left)
+% =====================================================================
+\begin{scope}[on background layer]
+    \node[draw, fill=spiblue!8, rounded corners=8pt, minimum width=4.5cm,
+          minimum height=6cm, thick] (hostbg) at (0, 0) {};
+\end{scope}
+\node[above, font=\small\bfseries, text=spiblue] at (0, 3.3) {HOST};
+
+\node[box, fill=spiblue!15] (lsusb) at (0, 2) {Host USB Tools\\{\tiny \texttt{usbip list}, \texttt{lsusb}}};
+\node[box, fill=spiblue!15] (usbip) at (0, -0.2) {USBIP Client\\{\tiny \texttt{usbip attach -r}}};
+\node[smallbox, fill=spiblue!10] (tcpcli) at (0, -2) {TCP Socket\\{\tiny port 3240}};
+
+\draw[arrow, spiblue] (lsusb) -- (usbip);
+\draw[arrow, spiblue] (usbip) -- (tcpcli);
+
+% =====================================================================
+% USBIP SERVER (center)
+% =====================================================================
+\begin{scope}[on background layer]
+    \node[draw, fill=uartgreen!8, rounded corners=8pt, minimum width=5cm,
+          minimum height=9.5cm, thick] (serverbg) at (7, -0.5) {};
+\end{scope}
+\node[above, font=\small\bfseries, text=uartgreen] at (7, 4.5) {PYTHON USBIP SERVER};
+
+\node[box, fill=uartgreen!15] (proto) at (7, 3) {Protocol Handler\\{\tiny \texttt{handle\_submit()}}};
+
+\node[smallbox, fill=uartgreen!12] (devlist) at (5.5, 1.3) {OP\_REQ\_\\DEVLIST};
+\node[smallbox, fill=uartgreen!12] (import) at (8.5, 1.3) {OP\_REQ\_\\IMPORT};
+
+% Inject interface box
+\node[draw, rounded corners=5pt, fill=nsred!8, minimum width=4.5cm,
+      minimum height=3cm, thick] (injectbg) at (7, -1.5) {};
+\node[above, font=\footnotesize\bfseries, text=nsred] at (7, -0.15) {Inject Interface (7 methods)};
+
+\node[smallbox, fill=nsred!12, font=\tiny] (m1) at (5.5, -0.8) {\texttt{inject\_vbus()}};
+\node[smallbox, fill=nsred!12, font=\tiny] (m2) at (8.5, -0.8) {\texttt{inject\_usbrst()}};
+\node[smallbox, fill=nsred!12, font=\tiny] (m3) at (5.5, -1.6) {\texttt{inject\_setup\_packet()}};
+\node[smallbox, fill=nsred!12, font=\tiny] (m4) at (8.5, -1.6) {\texttt{inject\_enumdne()}};
+\node[smallbox, fill=nsred!15, font=\tiny] (m5) at (5.5, -2.4) {\texttt{wait\_ep0\_response()}};
+\node[smallbox, fill=nsred!12, font=\tiny] (m6) at (8.5, -2.4) {\texttt{inject\_out\_data()}};
+
+% Discovery
+\node[smallbox, fill=mcugray!10, font=\tiny] (disc) at (7, -4) {Duck-typed discovery\\{\tiny \texttt{hasattr(p, 'inject\_setup\_packet')}}};
+
+\draw[arrow, uartgreen] (proto) -- (devlist);
+\draw[arrow, uartgreen] (proto) -- (import);
+\draw[arrow, nsred] (proto) -- (injectbg.north);
+\draw[arrow, mcugray, dashed] (disc) -- (injectbg.south);
+
+% =====================================================================
+% USB PERIPHERAL (right)
+% =====================================================================
+\begin{scope}[on background layer]
+    \node[draw, fill=securegreen!8, rounded corners=8pt, minimum width=5.5cm,
+          minimum height=6.5cm, thick] (periphbg) at (14, -0.5) {};
+\end{scope}
+\node[above, font=\small\bfseries, text=securegreen] at (14, 3) {USB PERIPHERAL IN QEMU};
+
+\node[box, fill=securegreen!15] (usbreg) at (14, 1.8) {USB Controller Registers\\{\tiny MMIO read/write from firmware}};
+
+\node[smallbox, fill=securegreen!12] (dwc2) at (12.3, 0) {DWC2 OTG\\{\tiny F4, H5, U5}};
+\node[smallbox, fill=securegreen!12] (pma) at (14, 0) {PMA USB FS\\{\tiny F1, WB55}};
+\node[smallbox, fill=securegreen!12] (rp) at (15.7, 0) {RP2040 USB\\{\tiny + DPRAM}};
+
+\node[box, fill=securegreen!15] (fw) at (14, -2) {Firmware (QEMU)\\{\tiny USB ISR $\to$ HAL $\to$ CDC stack}};
+
+\node[smallbox, fill=securegreen!10] (irq) at (14, -3.8) {IRQ $\to$ CPU\\{\tiny NVIC assertion}};
+
+\draw[arrow, securegreen] (usbreg) -- (dwc2);
+\draw[arrow, securegreen] (usbreg) -- (pma);
+\draw[arrow, securegreen] (usbreg) -- (rp);
+\draw[doublearrow, securegreen] (dwc2.south) -- ++(0,-0.6) -| (fw.north -| dwc2);
+\draw[doublearrow, securegreen] (pma.south) -- (fw);
+\draw[doublearrow, securegreen] (rp.south) -- ++(0,-0.6) -| (fw.north -| rp);
+\draw[arrow, securegreen] (fw) -- (irq);
+
+% =====================================================================
+% CONNECTIONS BETWEEN ZONES
+% =====================================================================
+
+% Host <-> USBIP Server
+\draw[doublearrow, trustzoneblue, line width=1.5pt]
+    (tcpcli.east) -- node[above, label] {USBIP/TCP} (proto.west |- tcpcli);
+
+% USBIP Server <-> USB Peripheral
+\draw[doublearrow, nsred, line width=1.5pt]
+    (injectbg.east) -- node[above, label] {inject / await} (usbreg.west |- injectbg);
+
+% Connection sequence annotation
+\node[draw, dashed, rounded corners=3pt, fill=trustzoneblue!5,
+      font=\tiny, align=left, text width=3.8cm] (seq) at (7, -6)
+    {\textbf{Connection Sequence:}\\
+     1. \texttt{inject\_vbus(True)}\\
+     2. \texttt{inject\_usbrst()}\\
+     3. \texttt{inject\_enumdne()}\\
+     4. Poll \texttt{is\_ready()}\\
+     5. Forward SETUP/DATA};
+
+% asyncio.Event annotation
+\node[draw, dashed, rounded corners=3pt, fill=nsred!5,
+      font=\tiny, align=left, text width=3.5cm] (evt) at (14, -6)
+    {\textbf{EP0 Completion:}\\
+     Firmware writes to TX FIFO\\
+     $\to$ \texttt{asyncio.Event.set()}\\
+     $\to$ \texttt{wait\_ep0\_response()}\\
+     returns data to USBIP};
+
+\draw[dashed, mcugray] (seq.south east) -- (evt.south west);
+
+\end{tikzpicture}
+
+\end{document}

@@ -52,9 +52,11 @@ Documentation
 
    tutorials/svd_to_peripheral
    tutorials/creating_boards
+   tutorials/adding_new_soc
    tutorials/stubbing_peripherals
    tutorials/mmio_tracing
    tutorials/ci_testing
+   tutorials/adding_usb_support
    tutorials/creating_ui_peripherals
    tutorials/debugging_bootloops
    tutorials/trustzone_emulation

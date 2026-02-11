@@ -1,0 +1,139 @@
+% Board Assembly — 5-Step Build Pipeline
+%
+% Shows how MCU_REGISTRY, PeripheralSet, PeripheralSetAdapter,
+% Board YAML, and external device wiring compose to build a Board.
+%
+% Compile with: pdflatex board_assembly.tex
+% Convert to PNG: pdftoppm -png -r 200 board_assembly.pdf board_assembly
+%
+% Author: Mathieu Renard <mathieu.renard@twistedwires.io>
+% Copyright (C) 2026 Twisted Wires Security Lab
+% SPDX-License-Identifier: Apache-2.0
+
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,fit,backgrounds,calc}
+
+\begin{document}
+
+\definecolor{trustzoneblue}{RGB}{0,123,255}
+\definecolor{securegreen}{RGB}{34,139,34}
+\definecolor{mcugray}{RGB}{100,100,100}
+\definecolor{spiblue}{RGB}{0,102,204}
+\definecolor{i2corange}{RGB}{230,126,34}
+\definecolor{gpiored}{RGB}{192,57,43}
+\definecolor{uartgreen}{RGB}{39,174,96}
+
+\begin{tikzpicture}[
+    step/.style={draw, rounded corners=5pt, minimum width=3.8cm, minimum height=1.4cm,
+                 align=center, font=\small, thick, fill=#1},
+    periph/.style={draw, rounded corners=3pt, minimum width=1.6cm, minimum height=0.6cm,
+                   align=center, font=\tiny, fill=#1},
+    arrow/.style={-{Stealth[length=3mm]}, thick, mcugray},
+    bigarrow/.style={-{Stealth[length=4mm]}, very thick, trustzoneblue},
+    label/.style={font=\footnotesize\bfseries},
+]
+
+% =====================================================================
+% Step 1: MCU_REGISTRY Lookup
+% =====================================================================
+\node[step=spiblue!12] (s1) at (0, 0)
+    {\textbf{1. MCU\_REGISTRY}\\{\tiny \texttt{board.py:58}}};
+
+\node[draw, rounded corners=2pt, fill=spiblue!5, font=\tiny, align=left,
+      text width=3.5cm, below=0.3cm of s1] (reg)
+    {\texttt{"STM32F405": (}\\
+     \texttt{~~"slab\_stm32",}\\
+     \texttt{~~"STM32F405Peri...",}\\
+     \texttt{~~"cortex-m4",}\\
+     \texttt{~~168000000)}};
+
+% =====================================================================
+% Step 2: Create PeripheralSet
+% =====================================================================
+\node[step=i2corange!12] (s2) at (6, 0)
+    {\textbf{2. PeripheralSet}\\{\tiny Dynamic import + instantiate}};
+
+% Peripheral boxes
+\node[periph=gpiored!15] (rcc) at (5, -1.8) {RCC};
+\node[periph=gpiored!15] (gpio) at (6, -1.8) {GPIO};
+\node[periph=spiblue!15] (spi) at (7, -1.8) {SPI};
+\node[periph=uartgreen!15] (uart) at (5, -2.6) {USART};
+\node[periph=i2corange!15] (i2c) at (6, -2.6) {I2C};
+\node[periph=trustzoneblue!15] (usb) at (7, -2.6) {USB};
+
+% =====================================================================
+% Step 3: Wrap in Adapter
+% =====================================================================
+\node[step=securegreen!12] (s3) at (12, 0)
+    {\textbf{3. PeripheralSetAdapter}\\{\tiny Normalize read/write/IRQ}};
+
+\node[draw, rounded corners=2pt, fill=securegreen!5, font=\tiny, align=left,
+      text width=3.5cm, below=0.3cm of s3] (adapt)
+    {\texttt{\_detect\_family()}\\
+     $\to$ \texttt{stm32} | \texttt{nrf} | \texttt{rp2040}\\[3pt]
+     \texttt{read(addr, size, sec)}\\
+     $\to$ \texttt{(value, status)}\\[3pt]
+     \texttt{write(addr, size, val, sec)}\\
+     $\to$ \texttt{status}};
+
+% =====================================================================
+% Step 4: Load Board YAML
+% =====================================================================
+\node[step=trustzoneblue!12] (s4) at (0, -5.5)
+    {\textbf{4. Board YAML}\\{\tiny \texttt{slab/boards/*.yaml}}};
+
+\node[draw, rounded corners=2pt, fill=trustzoneblue!5, font=\tiny, align=left,
+      text width=3.5cm, below=0.3cm of s4] (yaml)
+    {\texttt{name: STM32F405\_Blink}\\
+     \texttt{mcu: STM32F405}\\
+     \texttt{clock: 168000000}\\
+     \texttt{external\_devices:}\\
+     \texttt{~~- type: W25Q128}\\
+     \texttt{~~~~bus: SPI1}};
+
+% =====================================================================
+% Step 5: Wire + Build Board
+% =====================================================================
+\node[step=uartgreen!12] (s5) at (6, -5.5)
+    {\textbf{5. build\_board()}\\{\tiny Wire externals + UART + LEDs}};
+
+% Wiring details
+\node[periph=uartgreen!10, minimum width=2.2cm] (wspi) at (5, -7.3) {SPI Flash};
+\node[periph=uartgreen!10, minimum width=2.2cm] (wi2c) at (7.2, -7.3) {I2C EEPROM};
+\node[periph=uartgreen!10, minimum width=2.2cm] (wuart) at (5, -8.1) {UART capture};
+\node[periph=uartgreen!10, minimum width=2.2cm] (wled) at (7.2, -8.1) {LED tracking};
+
+% =====================================================================
+% Final: Board Object
+% =====================================================================
+\node[draw, rounded corners=8pt, fill=trustzoneblue!15, minimum width=4cm,
+      minimum height=2cm, align=center, font=\small, thick, very thick] (board) at (12, -5.5)
+    {\textbf{Board}\\{\footnotesize \texttt{adapter} + \texttt{uart\_output}}\\
+     {\footnotesize \texttt{led\_states} + \texttt{config}}};
+
+% =====================================================================
+% Arrows
+% =====================================================================
+\draw[arrow] (s1) -- node[above, font=\tiny] {importlib} (s2);
+\draw[arrow] (s2) -- node[above, font=\tiny] {wrap} (s3);
+\draw[arrow] (s4) -- node[above, font=\tiny] {devices} (s5);
+\draw[bigarrow] (s5) -- node[above, font=\tiny] {Board()} (board);
+
+% Diagonal connections
+\draw[arrow, dashed] (s3.south) -- ++(0, -1.5) -| (s5.north);
+\draw[arrow, dashed] (reg.south) -- ++(0, -0.5) -| (s4.north);
+
+% PeripheralSet to wiring
+\draw[arrow, dashed, spiblue] (spi.south) -- ++(0, -1.8) -| (wspi.north);
+\draw[arrow, dashed, i2corange] (i2c.south) -- ++(0, -2) -| (wi2c.north);
+\draw[arrow, dashed, uartgreen] (uart.south) -- ++(0, -2.4) -| (wuart.north);
+\draw[arrow, dashed, gpiored] (gpio.south) -- ++(0, -2.6) -| (wled.north);
+
+% Legend
+\node[font=\tiny\itshape, text=mcugray, align=center] at (12, -8.5)
+    {Solid arrows: data flow\\Dashed arrows: wiring hooks};
+
+\end{tikzpicture}
+
+\end{document}
