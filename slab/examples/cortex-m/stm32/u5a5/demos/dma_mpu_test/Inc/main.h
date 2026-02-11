@@ -24,6 +24,10 @@ extern "C" {
 #define DMA_TEST_SIZE_WORDS     64
 #define DMA_TEST_SIZE_BYTES     (DMA_TEST_SIZE_WORDS * 4)
 
+/* DMA small buffer for channel 1 test */
+#define DMA_SMALL_SIZE_WORDS    16
+#define DMA_SMALL_SIZE_BYTES    (DMA_SMALL_SIZE_WORDS * 4)
+
 void Error_Handler(void);
 
 #ifdef __cplusplus

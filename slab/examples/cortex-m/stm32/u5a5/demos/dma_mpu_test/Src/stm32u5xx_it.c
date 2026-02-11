@@ -7,6 +7,7 @@
 #include "stm32u5xx_it.h"
 
 extern DMA_HandleTypeDef hdma_ch0;
+extern DMA_HandleTypeDef hdma_ch1;
 
 /* Cortex-M33 Processor Exceptions */
 
@@ -60,4 +61,10 @@ void SysTick_Handler(void)
 void GPDMA1_Channel0_IRQHandler(void)
 {
   HAL_DMA_IRQHandler(&hdma_ch0);
+}
+
+/* GPDMA1 Channel 1 interrupt handler */
+void GPDMA1_Channel1_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(&hdma_ch1);
 }

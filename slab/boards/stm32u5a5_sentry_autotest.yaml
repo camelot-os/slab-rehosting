@@ -8,6 +8,10 @@ external_devices:
     params: {pin: 7, color: green}
 
 # U5A5: 4MB flash, 2496KB SRAM (SRAM1+2+3+5 contiguous)
+# STM32U5A5 has 8 MPU regions (QEMU Cortex-M33 defaults to 16)
+# TrustZone OFF: autotest mode doesn't use NS separation; QEMU strips
+# ARM_FEATURE_M_SECURITY so ARMv8-M EXC_RETURN works without PSP banking
 qemu_extra:
   sram-size: "0x270000"
   flash-size: "0x400000"
+  mpu-regions: "8"

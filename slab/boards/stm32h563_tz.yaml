@@ -5,6 +5,7 @@ qemu_extra:
   flash-base: "0x0C000000"
   sram-base: "0x30000000"
   sram-size: "0x50000"
+  mpu-regions: "8"
   trustzone: "on"
   sysclk-hz: "250000000"
   ns-flash-base: "0x08040000"
