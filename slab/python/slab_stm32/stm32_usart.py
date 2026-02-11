@@ -411,8 +411,23 @@ class STM32USARTv2(STM32Peripheral):
 
     def _write_reg(self, offset: int, size: int, value: int):
         if offset == self.CR1:
+            old_cr1 = self.cr1
             self.cr1 = value
-            if value & self.CR1_UE:
+            ue = bool(value & self.CR1_UE)
+            if not ue:
+                # UE disabled: hardware resets status flags
+                self.isr &= ~(self.ISR_TEACK | self.ISR_REACK)
+                self.isr |= self.ISR_TXE | self.ISR_TC
+            else:
+                # UE enabled: set TEACK/REACK based on TE/RE
+                if value & self.CR1_TE:
+                    self.isr |= self.ISR_TEACK
+                else:
+                    self.isr &= ~self.ISR_TEACK
+                if value & self.CR1_RE:
+                    self.isr |= self.ISR_REACK
+                else:
+                    self.isr &= ~self.ISR_REACK
                 self.log.debug(f"USART enabled")
         elif offset == self.CR2:
             self.cr2 = value
