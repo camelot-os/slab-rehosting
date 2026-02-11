@@ -210,6 +210,8 @@ Documentation
 
    tutorials/svd_to_peripheral
    tutorials/creating_boards
+   tutorials/server_modes
+   tutorials/peripheral_hooks
    tutorials/adding_new_soc
    tutorials/stubbing_peripherals
    tutorials/mmio_tracing
