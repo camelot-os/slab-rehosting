@@ -119,8 +119,8 @@
 
 /* MPU state area in SHM data region (offset 64) */
 #define SHM_MPU_OFFSET      SHM_HEADER_SIZE  /* starts at byte 64 */
-#define SHM_MPU_MAX_REGIONS 8
-/* Layout: [0:4] MPU_CTRL, [4:68] 8 regions × {RBAR(4), RASR(4)} = 68 bytes */
+#define SHM_MPU_MAX_REGIONS 16
+/* Layout: [0:4] MPU_CTRL, [4:132] up to 16 regions × {RBAR(4), RASR(4)} */
 #define SHM_MPU_STATE_SIZE  (4 + SHM_MPU_MAX_REGIONS * 8)
 
 /*
@@ -685,39 +685,44 @@ static uint64_t slab_proxy_transaction(SlabPeriphProxyState *s, bool is_write,
 }
 
 /*
- * MemoryRegion read callback
+ * MemoryRegion read callback (with attrs for TrustZone security state)
  */
-static uint64_t slab_proxy_read(void *opaque, hwaddr offset, unsigned size)
+static MemTxResult slab_proxy_read_with_attrs(void *opaque, hwaddr offset,
+                                               uint64_t *data, unsigned size,
+                                               MemTxAttrs attrs)
 {
     SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
     uint32_t addr = s->base_addr + offset;
 
-    s->current_secure = s->trustzone_enabled ? false : true;
+    s->current_secure = s->trustzone_enabled ? attrs.secure : true;
 
-    return slab_proxy_transaction(s, false, addr, size, 0);
+    *data = slab_proxy_transaction(s, false, addr, size, 0);
+    return MEMTX_OK;
 }
 
 /*
- * MemoryRegion write callback
+ * MemoryRegion write callback (with attrs for TrustZone security state)
  */
-static void slab_proxy_write(void *opaque, hwaddr offset, uint64_t value,
-                             unsigned size)
+static MemTxResult slab_proxy_write_with_attrs(void *opaque, hwaddr offset,
+                                                uint64_t value, unsigned size,
+                                                MemTxAttrs attrs)
 {
     SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
     uint32_t addr = s->base_addr + offset;
 
-    s->current_secure = s->trustzone_enabled ? false : true;
+    s->current_secure = s->trustzone_enabled ? attrs.secure : true;
 
     /* Update cache immediately */
     g_hash_table_insert(s->reg_cache, GUINT_TO_POINTER(addr),
                        GUINT_TO_POINTER((uint32_t)value));
 
     slab_proxy_transaction(s, true, addr, size, value);
+    return MEMTX_OK;
 }
 
 static const MemoryRegionOps slab_proxy_ops = {
-    .read = slab_proxy_read,
-    .write = slab_proxy_write,
+    .read_with_attrs = slab_proxy_read_with_attrs,
+    .write_with_attrs = slab_proxy_write_with_attrs,
     .endianness = DEVICE_LITTLE_ENDIAN,
     .impl = {
         .min_access_size = 1,
@@ -1178,6 +1183,7 @@ struct SlabCortexMState {
     char *shm_name;
     uint32_t num_irqs;
     uint32_t sysclk_hz;
+    uint32_t mpu_regions;       /* Override MPU region count (0 = CPU default) */
 
     /* TrustZone configuration */
     bool trustzone;
@@ -1325,6 +1331,7 @@ static void slab_cortex_m_init(MachineState *machine)
     qdev_prop_set_int32(proxy_dev, "tcp-port", s->tcp_port);
     qdev_prop_set_uint32(proxy_dev, "num-irqs", s->num_irqs);
     qdev_prop_set_string(proxy_dev, "name", "slab-periph");
+    qdev_prop_set_bit(proxy_dev, "trustzone", s->trustzone);
     if (s->shm_name && strlen(s->shm_name) > 0) {
         qdev_prop_set_string(proxy_dev, "shm-name", s->shm_name);
     }
@@ -1375,6 +1382,32 @@ static void slab_cortex_m_init(MachineState *machine)
                             OBJECT(get_system_memory()), &error_abort);
     sysbus_realize(SYS_BUS_DEVICE(armv7m_dev), &error_fatal);
     s->armv7m = armv7m_dev;
+
+    /* Override MPU region count if configured.
+     * QEMU's Cortex-M33 defaults to 16 regions, but many SoCs (e.g.
+     * STM32U5) only implement 8.  Firmware may assert on the exact count
+     * via MPU_TYPE.DREGION, so we must match the real hardware. */
+    if (s->mpu_regions > 0) {
+        ARMCPU *cpu = ARM_CPU(first_cpu);
+        cpu->pmsav7_dregion = s->mpu_regions;
+        info_report("  MPU regions: %u (override)", s->mpu_regions);
+    }
+
+    /*
+     * TrustZone: QEMU's Cortex-M33/M55 always set ARM_FEATURE_M_SECURITY
+     * which banks PSP into PSP_S/PSP_NS and requires SAU/IDAU setup.
+     * When trustzone=off (default), disable the Security Extension so
+     * the CPU uses a single unbanked PSP and accepts extended ARMv8-M
+     * EXC_RETURN values without Non-Secure state transitions.
+     */
+    if (is_armv8m && !s->trustzone) {
+        ARMCPU *cpu = ARM_CPU(first_cpu);
+        unset_feature(&cpu->env, ARM_FEATURE_M_SECURITY);
+        cpu->env.v7m.secure = false;
+        info_report("  TrustZone:   disabled (M_SECURITY cleared)");
+    } else if (s->trustzone) {
+        info_report("  TrustZone:   enabled");
+    }
 
     /* Connect proxy IRQs to NVIC */
     for (uint32_t i = 0; i < s->num_irqs; i++) {
@@ -1705,6 +1738,30 @@ static void slab_cortex_m_set_sysclk_hz(Object *obj,
     s->sysclk_hz = (uint32_t)v;
 }
 
+static char *slab_cortex_m_get_mpu_regions(Object *obj, Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    return g_strdup_printf("%u", s->mpu_regions);
+}
+
+static void slab_cortex_m_set_mpu_regions(Object *obj,
+                                          const char *value,
+                                          Error **errp)
+{
+    SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
+    uint64_t v;
+
+    if (qemu_strtou64(value, NULL, 0, &v)) {
+        error_setg(errp, "Invalid mpu-regions: '%s'", value);
+        return;
+    }
+    if (v > 16) {
+        error_setg(errp, "mpu-regions must be 0-16 (0 = CPU default)");
+        return;
+    }
+    s->mpu_regions = (uint32_t)v;
+}
+
 static char *slab_cortex_m_get_ns_flash_base(Object *obj, Error **errp)
 {
     SlabCortexMState *s = SLAB_CORTEX_M_MACHINE(obj);
@@ -1942,6 +1999,13 @@ static void slab_cortex_m_class_init(ObjectClass *oc, const void *data)
                                   slab_cortex_m_set_sysclk_hz);
     object_class_property_set_description(oc, "sysclk-hz",
         "System clock frequency in Hz (default: 168000000)");
+
+    /* MPU region count override */
+    object_class_property_add_str(oc, "mpu-regions",
+                                  slab_cortex_m_get_mpu_regions,
+                                  slab_cortex_m_set_mpu_regions);
+    object_class_property_set_description(oc, "mpu-regions",
+        "Override MPU region count (0 = CPU default, e.g. 8 for STM32U5)");
 
     /* Memory layout properties */
     object_class_property_add_str(oc, "flash-base",
