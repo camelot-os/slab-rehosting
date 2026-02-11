@@ -265,7 +265,7 @@ class PL011UART(RP2040Peripheral):
 
             # Callback for external transmission
             if self.on_tx:
-                self.on_tx(byte)
+                self.on_tx(bytes([byte]))
 
             self.log.debug(f"TX: 0x{byte:02X} ({chr(byte) if 32 <= byte < 127 else '?'})")
 

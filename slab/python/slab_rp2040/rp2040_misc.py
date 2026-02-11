@@ -664,19 +664,54 @@ class RP2040IOQSPI(RP2040Peripheral):
 
     Controls the 6 QSPI pins (SCLK, SS, SD0-SD3).
 
-    Register Map (per pin):
-        +0x00: STATUS  - GPIO status
+    Register Map (per pin, 8 bytes each):
+        +0x00: STATUS  - GPIO status (read-only)
         +0x04: CTRL    - GPIO control
+
+    Pin indices: 0=SCLK, 1=SS (BOOTSEL), 2=SD0, 3=SD1, 4=SD2, 5=SD3
+
+    BOOTSEL button: connected to QSPI_SS (pin 1).  The RP2040 bootrom
+    reads GPIO_QSPI_SS_STATUS (offset 0x08) bit 17 (INFROMPAD) to detect
+    whether BOOTSEL is pressed (active low).
     """
 
     NUM_PINS = 6  # SCLK, SS, SD0-SD3
+    PIN_SS = 1    # BOOTSEL is on QSPI_SS
 
-    def __init__(self, base: int = 0x40018000):
+    # STATUS register bits
+    STATUS_INFROMPAD = 1 << 17
+
+    def __init__(self, base: int = 0x40018000, bootsel_pressed: bool = False):
         super().__init__("IO_QSPI", base, 0x100)
+        self.bootsel_pressed = bootsel_pressed
 
         # Initialize function select to XIP (default)
         for i in range(self.NUM_PINS):
             self.regs[i * 8 + 4] = 0  # FUNCSEL = 0 (XIP)
+
+    def set_bootsel(self, pressed: bool):
+        """Set BOOTSEL button state.  True = pressed (pin pulled LOW)."""
+        self.bootsel_pressed = pressed
+
+    def _read_reg(self, offset, size):
+        pin = offset // 8
+        reg_type = offset % 8
+        if pin < self.NUM_PINS and reg_type == 0:
+            # STATUS register (read-only): compose from state
+            return self._get_pin_status(pin)
+        return self.regs.get(offset, 0)
+
+    def _get_pin_status(self, pin):
+        """Build STATUS register value for a QSPI pin."""
+        status = 0
+        if pin == self.PIN_SS:
+            # BOOTSEL: active low -- INFROMPAD=0 when pressed, 1 when released
+            if not self.bootsel_pressed:
+                status |= self.STATUS_INFROMPAD
+        else:
+            # Other QSPI pins default high
+            status |= self.STATUS_INFROMPAD
+        return status
 
 
 # =============================================================================
