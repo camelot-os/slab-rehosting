@@ -1544,6 +1544,8 @@ static uint32_t nvic_readl(NVICState *s, uint32_t offset, MemTxAttrs attrs)
         return cpu->isar.mvfr1;
     case 0xf48: /* MVFR2 */
         return cpu->isar.mvfr2;
+    case 0xdfc: /* DEMCR */
+        return s->demcr;
     default:
     bad_offset:
         qemu_log_mask(LOG_GUEST_ERROR, "NVIC: Bad read offset 0x%x\n", offset);
@@ -2144,6 +2146,11 @@ static void nvic_writel(NVICState *s, uint32_t offset, uint32_t value,
     case 0xf74: /* DCCISW */
     case 0xf78: /* BPIALL */
         /* Cache and branch predictor maintenance: for QEMU these always NOP */
+        break;
+    case 0xdfc: /* DEMCR */
+        /* Writable: TRCENA(24), MON_REQ(19), MON_STEP(18), MON_PEND(17),
+         * MON_EN(16), VC_HARDERR(10)..VC_CORERESET(0) */
+        s->demcr = value & 0x01F0FFFF;
         break;
     default:
     bad_offset:
