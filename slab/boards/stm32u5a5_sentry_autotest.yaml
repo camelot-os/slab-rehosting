@@ -15,3 +15,5 @@ qemu_extra:
   sram-size: "0x270000"
   flash-size: "0x400000"
   mpu-regions: "8"
+  periph-base: "0x0BFA0000"
+  periph-size: "0x54060000"
