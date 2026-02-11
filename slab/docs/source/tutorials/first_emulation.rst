@@ -65,11 +65,11 @@ Output::
 Step 2: Create the Peripheral Set
 =================================
 
-MCUemu provides pre-built peripheral sets, but let's understand how they work:
+SLAB provides pre-built peripheral sets, but let's understand how they work:
 
 .. code-block:: python
 
-   from slab_cortex_m import SlabPeripheralServer
+   from slab_stm32.stm32_base import STM32Peripheral
 
    class STM32F405PeripheralSet:
        """Peripheral set for STM32F405."""
@@ -94,18 +94,18 @@ MCUemu provides pre-built peripheral sets, but let's understand how they work:
 
        def _init_gpio(self):
            """Initialize GPIO ports."""
-           from slab_stm32.stm32_gpio import STM32GPIO
+           from slab_stm32.stm32_gpio import STM32GPIOv1
            self.gpio = {}
            for port_idx, port_name in enumerate('ABCDEFGHI'):
                base = 0x40020000 + port_idx * 0x400
-               gpio = STM32GPIO(base=base, port_name=port_name)
+               gpio = STM32GPIOv1(port=port_name, base=base)
                self.gpio[port_name] = gpio
                self.peripherals[f'GPIO{port_name}'] = gpio
 
        def _init_usart(self):
            """Initialize USARTs."""
-           from slab_stm32.stm32_usart import STM32USART
-           self.usart2 = STM32USART(base=0x40004400, name='USART2')
+           from slab_stm32.stm32_usart import STM32USARTv1
+           self.usart2 = STM32USARTv1(index=2, base=0x40004400)
            self.peripherals['USART2'] = self.usart2
 
        def read(self, address: int, size: int) -> tuple:
@@ -258,7 +258,6 @@ Start the peripheral server:
    import asyncio
 
    server = MCUemuServer(port=5555)
-   server.peripheral_set = STM32F4xxPeripheralSet()
    server.create_peripherals()
    asyncio.run(server.start())
    "

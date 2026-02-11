@@ -82,7 +82,7 @@ Available files:
 Step 2: Parsing with svd_parser.py
 ===================================
 
-The SLAB framework includes a powerful SVD parser at ``/home/mre/projects/slab-rehosting/slab/python/slab_cortex_m/svd_parser.py``.
+The SLAB framework includes a powerful SVD parser at ``slab/python/slab_cortex_m/svd_parser.py``.
 
 Basic Parsing
 -------------
@@ -465,7 +465,7 @@ Run tests with:
 
 .. code-block:: bash
 
-   PYTHONPATH=/home/mre/projects/slab-rehosting/slab/python pytest test_my_peripheral.py -v
+   PYTHONPATH=slab/python pytest test_my_peripheral.py -v
 
 Step 7: Wiring External Devices
 ================================
@@ -521,10 +521,10 @@ UART Logging
 
 .. code-block:: python
 
-   from slab_stm32.stm32_uart import STM32UART
+   from slab_stm32.stm32_usart import STM32USARTv1
 
-   # Create UART
-   uart = STM32UART(index=2, base=0x40004400)
+   # Create USART
+   uart = STM32USARTv1(index=2, base=0x40004400)
 
    # Capture transmitted bytes
    output_buffer = []
@@ -542,10 +542,10 @@ GPIO Pin Change Callbacks
 
 .. code-block:: python
 
-   from slab_stm32.stm32_gpio import STM32GPIO
+   from slab_stm32.stm32_gpio import STM32GPIOv1
 
    # Create GPIO port
-   gpioa = STM32GPIO(port='A', base=0x40020000)
+   gpioa = STM32GPIOv1(port='A', base=0x40020000)
 
    def on_pin_change(pin, value, is_output):
        """Called when firmware changes pin state."""

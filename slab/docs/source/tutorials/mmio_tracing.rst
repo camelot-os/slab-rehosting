@@ -37,10 +37,11 @@ To enable tracing, create an ``MMIOTracer`` instance and attach it to your perip
    :caption: Basic tracing setup
 
    from slab_cortex_m.mmio_tracer import MMIOTracer
-   from slab_stm32.stm32f4_server import STM32F4Server
+   from slab_cortex_m.mcuemu_server import MCUemuServer
 
    # Create server
-   server = STM32F4Server(port=9999)
+   server = MCUemuServer(port=9999)
+   server.create_peripherals()
 
    # Attach tracer
    tracer = MMIOTracer()

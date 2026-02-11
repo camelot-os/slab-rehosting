@@ -292,12 +292,8 @@ Running the TrustZone Example
 
 .. code-block:: bash
 
-   PYTHONPATH=slab/python python3 -c "
-   import asyncio
-   from slab_stm32 import STM32H563PeripheralSet
-   from slab_cortex_m.mcuemu_server import run_tz_server
-   asyncio.run(run_tz_server(STM32H563PeripheralSet(), port=5000))
-   "
+   PYTHONPATH=slab/python python3 slab/python/slab_cortex_m/mcuemu_server.py \
+       --port 5555 --board slab/boards/stm32h563_tz.yaml
 
 3. Run QEMU:
 
