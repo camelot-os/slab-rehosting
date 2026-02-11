@@ -1011,9 +1011,9 @@ class STM32RCCv5(STM32RCCBase):
     def _init_regs(self):
         """Initialize with reset defaults."""
         # CR: MSIS on and ready at reset (RM0456 reset value = 0x00000035)
+        # MSIK is NOT enabled at reset -- firmware must enable it explicitly
         self.regs[self.CR] = (
             self.CR_MSISON | self.CR_MSISRDY |
-            self.CR_MSIKON | self.CR_MSIKRDY |
             self.CR_MSIPLLMODE | self.CR_MSIPLLFAST
         )
         self.regs[self.ICSCR1] = 0x44000000  # MSIRANGE=4 (4MHz)

@@ -761,7 +761,7 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
 
         self.gpio = {}
         for port, base in gpio_bases.items():
-            self.gpio[port] = STM32GPIOv2(port=port, base=base)
+            self.gpio[port] = STM32GPIOv2(port=port, base=base, family="H5")
             self.add_peripheral(self.gpio[port])
 
         self.exti = STM32EXTI(base=0x46022000)
