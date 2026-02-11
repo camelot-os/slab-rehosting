@@ -25,18 +25,18 @@
     {
       "name": "STM32F405 HelloBlinkUart [legacy]",
       "passed": true,
-      "mmio_count": 68230,
+      "mmio_count": 49253,
       "device_transactions": 0,
-      "duration": 6.01,
+      "duration": 6.11,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F405 HelloBlinkUart [board]",
       "passed": true,
-      "mmio_count": 62231,
+      "mmio_count": 44544,
       "device_transactions": 0,
-      "duration": 6.02,
+      "duration": 6.03,
       "qemu_exit": 124,
       "error": ""
     },
@@ -72,16 +72,16 @@
       "passed": true,
       "mmio_count": 5,
       "device_transactions": 0,
-      "duration": 6.13,
+      "duration": 6.14,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F439 Crypto CDC [direct]",
       "passed": true,
-      "mmio_count": 134256,
+      "mmio_count": 96936,
       "device_transactions": 0,
-      "duration": 6.34,
+      "duration": 6.01,
       "qemu_exit": 124,
       "error": ""
     },
@@ -106,9 +106,9 @@
     {
       "name": "STM32F439 Crypto CDC [board]",
       "passed": true,
-      "mmio_count": 61626,
+      "mmio_count": 46289,
       "device_transactions": 0,
-      "duration": 6.05,
+      "duration": 6.01,
       "qemu_exit": 124,
       "error": ""
     },
@@ -117,7 +117,7 @@
       "passed": true,
       "mmio_count": 24,
       "device_transactions": 0,
-      "duration": 6.16,
+      "duration": 6.14,
       "qemu_exit": 124,
       "error": ""
     },
@@ -133,9 +133,9 @@
     {
       "name": "STM32F439 Crypto CDC [WooKey]",
       "passed": true,
-      "mmio_count": 62748,
+      "mmio_count": 49177,
       "device_transactions": 0,
-      "duration": 6.04,
+      "duration": 6.05,
       "qemu_exit": 124,
       "error": ""
     },
@@ -162,7 +162,7 @@
       "passed": true,
       "mmio_count": 64,
       "device_transactions": 0,
-      "duration": 8.06,
+      "duration": 8.02,
       "qemu_exit": 124,
       "error": ""
     },
@@ -243,7 +243,7 @@
       "passed": true,
       "mmio_count": 12,
       "device_transactions": 0,
-      "duration": 6.01,
+      "duration": 6.02,
       "qemu_exit": 124,
       "error": ""
     },
@@ -279,7 +279,7 @@
       "passed": true,
       "mmio_count": 2,
       "device_transactions": 0,
-      "duration": 6.12,
+      "duration": 6.19,
       "qemu_exit": 124,
       "error": ""
     },
@@ -288,7 +288,7 @@
       "passed": true,
       "mmio_count": 10,
       "device_transactions": 0,
-      "duration": 6.13,
+      "duration": 6.15,
       "qemu_exit": 124,
       "error": ""
     },
@@ -306,7 +306,7 @@
       "passed": true,
       "mmio_count": 12,
       "device_transactions": 0,
-      "duration": 6.14,
+      "duration": 6.15,
       "qemu_exit": 124,
       "error": ""
     },
@@ -315,7 +315,7 @@
       "passed": true,
       "mmio_count": 12,
       "device_transactions": 0,
-      "duration": 6.13,
+      "duration": 6.14,
       "qemu_exit": 124,
       "error": ""
     },
@@ -340,9 +340,9 @@
     {
       "name": "RP2040 EEPROM [direct]",
       "passed": true,
-      "mmio_count": 14197,
+      "mmio_count": 11161,
       "device_transactions": 0,
-      "duration": 6.02,
+      "duration": 6.05,
       "qemu_exit": 124,
       "error": ""
     },
@@ -358,7 +358,7 @@
     {
       "name": "STM32F405 HelloBlink [shm]",
       "passed": true,
-      "mmio_count": 223,
+      "mmio_count": 222,
       "device_transactions": 0,
       "duration": 6.01,
       "qemu_exit": 124,
@@ -367,27 +367,27 @@
     {
       "name": "STM32F405 HelloBlinkUart [shm]",
       "passed": true,
-      "mmio_count": 74620,
+      "mmio_count": 71607,
       "device_transactions": 0,
-      "duration": 6.01,
+      "duration": 6.05,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32F439 Crypto CDC [shm]",
       "passed": true,
-      "mmio_count": 78890,
+      "mmio_count": 73717,
       "device_transactions": 0,
-      "duration": 6.18,
+      "duration": 6.04,
       "qemu_exit": 124,
       "error": ""
     },
     {
       "name": "STM32H563 TZ Secure [shm]",
       "passed": true,
-      "mmio_count": 807,
+      "mmio_count": 803,
       "device_transactions": 0,
-      "duration": 10.01,
+      "duration": 10.02,
       "qemu_exit": 124,
       "error": ""
     }
