@@ -703,6 +703,9 @@ def build_test_cases() -> List[TestCase]:
         "sysclk-hz": "160000000",
         "sram-size": "0x270000",
         "flash-size": "0x400000",
+        # Extend proxy to cover OTP/UID at 0x0BFA0700
+        "periph-base": "0x0BFA0000",
+        "periph-size": "0x54060000",
     }
     tests.append(TestCase(
         name="STM32U5A5 CDC Blinky [board]",

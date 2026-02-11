@@ -16,6 +16,10 @@ external_devices:
     params: {pin: 7, color: blue}
 
 # U5A5: 4MB flash, 2496KB SRAM (SRAM1+2+3+5 contiguous)
+# Extend peripheral proxy to cover OTP/UID at 0x0BFA0700
+# (Flash/SRAM memory regions at higher priority take precedence)
 qemu_extra:
   sram-size: "0x270000"
   flash-size: "0x400000"
+  periph-base: "0x0BFA0000"
+  periph-size: "0x54060000"
