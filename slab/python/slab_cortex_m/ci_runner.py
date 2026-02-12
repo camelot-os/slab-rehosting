@@ -545,8 +545,10 @@ class CIRunner:
             board_config = load_board_config(scenario.board)
             board = build_board(board_config)
             handler = CIShmHandler(board)
+            cpu = get_qemu_cpu(board_config)
 
             bridge = ShmPeripheralBridge(shm_name=shm_name)
+            bridge.arch_v8m = cpu in ('cortex-m23', 'cortex-m33', 'cortex-m55', 'cortex-m85')
             bridge.create()
             bridge.register_peripheral(handler.base_address, handler)
 
@@ -557,7 +559,6 @@ class CIRunner:
             bridge.start_handler()
 
             # Build QEMU command (SHM mode)
-            cpu = get_qemu_cpu(board_config)
             machine_opts = f'slab-cortex-m,cpu-type={cpu},shm-name={shm_name}'
             for k, v in board_config.qemu_extra.items():
                 machine_opts += f',{k}={v}'

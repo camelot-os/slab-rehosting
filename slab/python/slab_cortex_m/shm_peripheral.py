@@ -243,6 +243,9 @@ class ShmPeripheralBridge:
     # Memory protection controller (MPU/MMU/DART override mode)
     protection: Optional['MemoryProtectionController'] = None
 
+    # ARMv8-M flag (Cortex-M23/M33/M55) -- used for PMSAv8 MPU format in SHM sync
+    arch_v8m: bool = False
+
     # Fault handler (for crash detection and auto-snapshot)
     fault_handler: Optional[Any] = None  # FaultHandler instance
 
@@ -511,7 +514,7 @@ class ShmPeripheralBridge:
         ctrl = struct.unpack('<I', raw[0:4])[0]
 
         if mpu is None:
-            mpu = CortexMPU(num_regions=MPU_MAX_REGIONS)
+            mpu = CortexMPU(num_regions=MPU_MAX_REGIONS, arch_v8m=self.arch_v8m)
 
         # Update control register state
         mpu.enabled = bool(ctrl & (1 << MPUCtrlBits.ENABLE))
