@@ -97,6 +97,10 @@ class DirectServer(BasePeripheralServer):
         self.pset = pset
         self.mmio_count = 0
 
+        # Wire IRQ callbacks from peripherals to TCP send_irq
+        if hasattr(pset, 'setup_irq_callback'):
+            pset.setup_irq_callback(self.send_irq)
+
     def create_peripherals(self):
         pass
 
