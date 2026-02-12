@@ -724,6 +724,15 @@ def build_test_cases() -> List[TestCase]:
         qemu_extra=u5a5_qemu,
     ))
 
+    # -- STM32U5A5 DMA + MPU Test (Cortex-M33, GPDMA + PMSAv8) --
+    tests.append(TestCase(
+        name="STM32U5A5 DMA+MPU [direct]",
+        firmware="slab/examples/cortex-m/stm32/u5a5/demos/dma_mpu_test/build/U5A5_DMA_MPU_Test.bin",
+        cpu="cortex-m33", mode="direct", mcu="STM32U5A5",
+        timeout=8, expect_mmio=50,
+        qemu_extra=u5a5_qemu,
+    ))
+
     # -- RP2040 (flash at 0x10000000) --
     tests.append(TestCase(
         name="RP2040 EEPROM [direct]",
