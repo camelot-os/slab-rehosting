@@ -42,7 +42,7 @@ class NRFTWIM(NRFPeripheral):
 
     FREQ_100K = 0x01980000
     FREQ_250K = 0x04000000
-    FREQ_400K = 0x06400000
+    FREQ_400K = 0x06680000
 
     TWIM_BASES = {0: 0x40003000, 1: 0x40004000}
 
@@ -55,6 +55,8 @@ class NRFTWIM(NRFPeripheral):
         self.frequency = self.FREQ_100K
         self.address = 0
         self.errorsrc = 0
+        self.psel_scl = 0xFFFFFFFF
+        self.psel_sda = 0xFFFFFFFF
         self.rxd_ptr = 0
         self.rxd_maxcnt = 0
         self.rxd_amount = 0
@@ -69,6 +71,8 @@ class NRFTWIM(NRFPeripheral):
     def _read_reg(self, offset: int, size: int) -> int:
         regs = {
             self.ENABLE: self.enable,
+            self.PSEL_SCL: self.psel_scl,
+            self.PSEL_SDA: self.psel_sda,
             self.FREQUENCY: self.frequency,
             self.ADDRESS: self.address,
             self.ERRORSRC: self.errorsrc,
@@ -84,6 +88,10 @@ class NRFTWIM(NRFPeripheral):
     def _write_reg(self, offset: int, size: int, value: int):
         if offset == self.ENABLE:
             self.enable = value
+        elif offset == self.PSEL_SCL:
+            self.psel_scl = value
+        elif offset == self.PSEL_SDA:
+            self.psel_sda = value
         elif offset == self.FREQUENCY:
             self.frequency = value
         elif offset == self.ADDRESS:
@@ -106,6 +114,21 @@ class NRFTWIM(NRFPeripheral):
             self._start_rx()
         elif offset == self.TASKS_STOP:
             self.set_event(self.EVENTS_STOPPED)
+
+    def _check_shortcuts(self, event_offset: int):
+        """Handle TWIM shortcuts (nRF52840 PS section 6.31.7)."""
+        if event_offset == self.EVENTS_LASTTX:
+            if self.shorts & (1 << 7):    # LASTTX_STARTRX
+                self._start_rx()
+            if self.shorts & (1 << 8):    # LASTTX_SUSPEND
+                self.set_event(self.EVENTS_SUSPENDED)
+            if self.shorts & (1 << 9):    # LASTTX_STOP
+                self.set_event(self.EVENTS_STOPPED)
+        elif event_offset == self.EVENTS_LASTRX:
+            if self.shorts & (1 << 10):   # LASTRX_STARTTX
+                self._start_tx()
+            if self.shorts & (1 << 12):   # LASTRX_STOP
+                self.set_event(self.EVENTS_STOPPED)
 
     def _start_tx(self):
         if self.enable != 6:
