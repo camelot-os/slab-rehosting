@@ -430,6 +430,115 @@ class TestSTM32Peripherals(unittest.TestCase):
         dma.write(0x18 + 0x04, 4, 16)          # NDTR
 
 
+class TestSTM32GPDMA(unittest.TestCase):
+    """Test STM32U5 GPDMA controller."""
+
+    def setUp(self):
+        from slab_stm32.stm32_dma import STM32GPDMA
+        self.gpdma = STM32GPDMA(name="GPDMA1", base=0x40020000, num_channels=16)
+        self.irq_log = []
+        self.gpdma.irq_callback = lambda irq, level: self.irq_log.append((irq, level))
+
+    def test_global_registers(self):
+        """SECCFGR, PRIVCFGR, RCFGLOCKR read/write."""
+        gpdma = self.gpdma
+        gpdma.write(0x40020000, 4, 0xFFFF)   # SECCFGR
+        gpdma.write(0x40020004, 4, 0xAAAA)   # PRIVCFGR
+        self.assertEqual(gpdma.read(0x40020000, 4)[0], 0xFFFF)
+        self.assertEqual(gpdma.read(0x40020004, 4)[0], 0xAAAA)
+
+    def test_channel_offsets(self):
+        """Channel registers at correct offsets (0x50 + N*0x80)."""
+        base = 0x40020000
+        gpdma = self.gpdma
+        # Channel 0 CSAR at base + 0x50 + 0x4C = 0x9C
+        gpdma.write(base + 0x9C, 4, 0x20000000)
+        self.assertEqual(gpdma.channels[0]['csar'], 0x20000000)
+        # Channel 0 CDAR at base + 0x50 + 0x50 = 0xA0
+        gpdma.write(base + 0xA0, 4, 0x40001000)
+        self.assertEqual(gpdma.channels[0]['cdar'], 0x40001000)
+        # Channel 1 CCR at base + 0xD0 + 0x14 = 0xE4
+        gpdma.write(base + 0xE4, 4, 0x100)  # TCIE
+        self.assertEqual(gpdma.channels[1]['ccr'], 0x100)
+
+    def test_csr_idle_at_reset(self):
+        """CSR.IDLEF = 1 at reset for all channels."""
+        base = 0x40020000
+        for ch in range(16):
+            csr_addr = base + 0x50 + ch * 0x80 + 0x10
+            val = self.gpdma.read(csr_addr, 4)[0]
+            self.assertTrue(val & 1, f"CH{ch} not idle at reset")
+
+    def test_cfcr_clears_status(self):
+        """Writing CFCR clears CSR flags."""
+        gpdma = self.gpdma
+        base = 0x40020000
+        ch0_ccr = base + 0x50 + 0x14
+        ch0_cbr1 = base + 0x50 + 0x48
+        ch0_cfcr = base + 0x50 + 0x0C
+        ch0_csr = base + 0x50 + 0x10
+        # Configure and enable to get TCF set
+        gpdma.write(ch0_cbr1, 4, 0)  # BNDT=0
+        gpdma.write(ch0_ccr, 4, 0x101)  # EN + TCIE
+        # TCF should be set after immediate completion
+        csr = gpdma.read(ch0_csr, 4)[0]
+        self.assertTrue(csr & (1 << 8), "TCF not set after transfer")
+        # Clear TCF via CFCR
+        gpdma.write(ch0_cfcr, 4, 1 << 8)
+        csr = gpdma.read(ch0_csr, 4)[0]
+        self.assertFalse(csr & (1 << 8), "TCF not cleared by CFCR")
+
+    def test_enable_sets_tcf_and_irq(self):
+        """Enable with TCIE fires IRQ on transfer complete."""
+        gpdma = self.gpdma
+        base = 0x40020000
+        ch0 = base + 0x50
+        # Configure channel 0: src=0x20000000, dst=0x40001000, 16 bytes
+        gpdma.write(ch0 + 0x4C, 4, 0x20000000)  # CSAR
+        gpdma.write(ch0 + 0x50, 4, 0x40001000)  # CDAR
+        gpdma.write(ch0 + 0x48, 4, 16)           # CBR1.BNDT = 16
+        gpdma.write(ch0 + 0x40, 4, 0x00080008)   # CTR1: SINC + DINC
+        gpdma.write(ch0 + 0x44, 4, 0x200)        # CTR2: SWREQ
+        # Enable with TCIE
+        gpdma.write(ch0 + 0x14, 4, 0x101)        # CCR: EN + TCIE
+        # Should have fired IRQ 29 (channel 0)
+        self.assertTrue(any(irq == 29 and lvl == 1 for irq, lvl in self.irq_log),
+                        f"No IRQ 29 assertion in {self.irq_log}")
+
+    def test_reset_clears_channel(self):
+        """CCR.RESET clears all channel registers."""
+        gpdma = self.gpdma
+        base = 0x40020000
+        ch0 = base + 0x50
+        gpdma.write(ch0 + 0x4C, 4, 0xDEAD)  # CSAR
+        gpdma.write(ch0 + 0x14, 4, 0x2)      # CCR: RESET
+        self.assertEqual(gpdma.channels[0]['csar'], 0)
+        self.assertEqual(gpdma.channels[0]['ccr'], 0)
+        csr = gpdma.read(ch0 + 0x10, 4)[0]
+        self.assertTrue(csr & 1, "Not idle after reset")
+
+    def test_misr_reflects_pending(self):
+        """MISR bit set when channel has pending interrupt."""
+        gpdma = self.gpdma
+        base = 0x40020000
+        ch2 = base + 0x50 + 2 * 0x80
+        gpdma.write(ch2 + 0x44, 4, 0x200)    # CTR2: SWREQ
+        gpdma.write(ch2 + 0x14, 4, 0x101)    # CCR: EN + TCIE
+        misr = gpdma.read(base + 0x0C, 4)[0]
+        self.assertTrue(misr & (1 << 2), f"MISR bit 2 not set: 0x{misr:04X}")
+
+    def test_lpdma_4_channels(self):
+        """LPDMA has 4 channels with IRQ 114-117."""
+        from slab_stm32.stm32_dma import STM32GPDMA
+        lpdma = STM32GPDMA(name="LPDMA1", base=0x46025000, num_channels=4)
+        self.assertEqual(lpdma.num_channels, 4)
+        self.assertEqual(lpdma._irqs, [114, 115, 116, 117])
+        # Channel 3 exists, channel 4 doesn't
+        ch3_csr = 0x46025000 + 0x50 + 3 * 0x80 + 0x10
+        val = lpdma.read(ch3_csr, 4)[0]
+        self.assertTrue(val & 1)  # IDLEF
+
+
 # =============================================================================
 # W25Q FLASH TESTS
 # =============================================================================
