@@ -24,7 +24,7 @@ from .stm32_usart import STM32USARTv2, STM32LPUART
 from .stm32_spi import STM32SPIv2
 from .stm32_i2c import STM32I2Cv2
 from .stm32_rcc import STM32RCCv5
-from .stm32_dma import STM32DMAv2
+from .stm32_dma import STM32GPDMA
 from .stm32_timers import STM32BasicTimer, STM32GeneralTimer, STM32AdvancedTimer, STM32LPTIM
 from .stm32_adc import STM32ADCv3
 from .stm32_dac import STM32DAC
@@ -865,13 +865,12 @@ class STM32U5xxPeripheralSet(STM32PeripheralSet):
 
     def _create_dma(self):
         """Create DMA controllers."""
-        # GPDMA (General Purpose DMA) - 16 channels
-        self.gpdma1 = STM32DMAv2(index=1, base=0x40020000)
+        # GPDMA1: 16 channels, IRQ 29-36 (ch0-7) + 80-87 (ch8-15)
+        self.gpdma1 = STM32GPDMA(name="GPDMA1", base=0x40020000, num_channels=16)
         self.add_peripheral(self.gpdma1)
 
-        # LPDMA (Low Power DMA) - 4 channels
-        self.lpdma = STM32DMAv2(index=2, base=0x46025000)
-        self.lpdma.num_streams = 4
+        # LPDMA1: 4 channels, IRQ 114-117
+        self.lpdma = STM32GPDMA(name="LPDMA1", base=0x46025000, num_channels=4)
         self.add_peripheral(self.lpdma)
 
     def _create_security(self):
