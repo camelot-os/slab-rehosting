@@ -1,0 +1,1 @@
+../cdc_blinky/STM32U5A5ZJTXQ_FLASH.ld
