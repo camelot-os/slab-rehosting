@@ -8,7 +8,7 @@ The nRF52840 QSPI peripheral provides:
 - Custom instruction support for flash commands
 - Deep Power-Down mode support
 
-Register Map (based on nRF52840 Product Specification):
+Register Map (based on nRF52840 Product Specification / nrf52.h):
     0x000: TASKS_ACTIVATE    - Activate QSPI interface
     0x004: TASKS_READSTART   - Start read from external flash
     0x008: TASKS_WRITESTART  - Start write to external flash
@@ -16,19 +16,19 @@ Register Map (based on nRF52840 Product Specification):
     0x010: TASKS_DEACTIVATE  - Deactivate QSPI interface
     0x100: EVENTS_READY      - QSPI ready
     0x500: ENABLE
-    0x504: READ.SRC          - Flash source address
-    0x508: READ.DST          - RAM destination address
-    0x50C: READ.CNT          - Read byte count
-    0x510: WRITE.DST         - Flash destination address
-    0x514: WRITE.SRC         - RAM source address
-    0x518: WRITE.CNT         - Write byte count
-    0x51C: ERASE.PTR         - Flash erase address
-    0x520: ERASE.LEN         - Erase size (0=4KB, 1=64KB, 2=all)
-    0x544: IFCONFIG0         - Interface configuration 0
-    0x604: STATUS            - Status register
-    0x634: CINSTRCONF        - Custom instruction configuration
-    0x638: CINSTRDAT0        - Custom instruction data 0
-    0x63C: CINSTRDAT1        - Custom instruction data 1
+    0x508: READ.SRC          - Flash source address
+    0x50C: READ.DST          - RAM destination address
+    0x510: READ.CNT          - Read byte count
+    0x518: WRITE.DST         - Flash destination address
+    0x51C: WRITE.SRC         - RAM source address
+    0x520: WRITE.CNT         - Write byte count
+    0x528: ERASE.PTR         - Flash erase address
+    0x52C: ERASE.LEN         - Erase size (0=4KB, 1=64KB, 2=all)
+    0x564: IFCONFIG0         - Interface configuration 0
+    0x624: STATUS            - Status register
+    0x654: CINSTRCONF        - Custom instruction configuration
+    0x658: CINSTRDAT0        - Custom instruction data 0
+    0x65C: CINSTRDAT1        - Custom instruction data 1
 
 Author: Mathieu Renard <mathieu.renard@twistedwires.io>
 Copyright (C) 2025 Twisted Wires Security Lab
@@ -58,36 +58,36 @@ class NRFQSPI(NRFPeripheral):
     # Events
     EVENTS_READY = 0x100
 
-    # Registers
+    # Registers (offsets verified against nrf52.h NRF_QSPI_Type struct)
     ENABLE = 0x500
-    READ_SRC = 0x504      # Flash address to read from
-    READ_DST = 0x508      # RAM address to write to
-    READ_CNT = 0x50C      # Number of bytes to read
-    WRITE_DST = 0x510     # Flash address to write to
-    WRITE_SRC = 0x514     # RAM address to read from
-    WRITE_CNT = 0x518     # Number of bytes to write
-    ERASE_PTR = 0x51C     # Flash address to erase
-    ERASE_LEN = 0x520     # Erase length (0=4KB, 1=64KB, 2=all)
+    READ_SRC = 0x508      # Flash address to read from
+    READ_DST = 0x50C      # RAM address to write to
+    READ_CNT = 0x510      # Number of bytes to read
+    WRITE_DST = 0x518     # Flash address to write to
+    WRITE_SRC = 0x51C     # RAM address to read from
+    WRITE_CNT = 0x520     # Number of bytes to write
+    ERASE_PTR = 0x528     # Flash address to erase
+    ERASE_LEN = 0x52C     # Erase length (0=4KB, 1=64KB, 2=all)
 
     # Pin selection
-    PSEL_SCK = 0x524
-    PSEL_CSN = 0x528
-    PSEL_IO0 = 0x52C      # MOSI / IO0
-    PSEL_IO1 = 0x530      # MISO / IO1
-    PSEL_IO2 = 0x534      # IO2
-    PSEL_IO3 = 0x538      # IO3
+    PSEL_SCK = 0x540
+    PSEL_CSN = 0x544
+    PSEL_IO0 = 0x54C      # MOSI / IO0
+    PSEL_IO1 = 0x550      # MISO / IO1
+    PSEL_IO2 = 0x554      # IO2
+    PSEL_IO3 = 0x558      # IO3
 
     # Configuration
-    XIPOFFSET = 0x540
-    IFCONFIG0 = 0x544
-    IFCONFIG1 = 0x600
-    STATUS = 0x604
-    DPMDUR = 0x614
-    ADDRCONF = 0x624
-    CINSTRCONF = 0x634
-    CINSTRDAT0 = 0x638
-    CINSTRDAT1 = 0x63C
-    IFTIMING = 0x6C0
+    XIPOFFSET = 0x560
+    IFCONFIG0 = 0x564
+    IFCONFIG1 = 0x620
+    STATUS = 0x624
+    DPMDUR = 0x634
+    ADDRCONF = 0x644
+    CINSTRCONF = 0x654
+    CINSTRDAT0 = 0x658
+    CINSTRDAT1 = 0x65C
+    IFTIMING = 0x660
 
     # IFCONFIG0 bits
     IFCONFIG0_READOC_FASTREAD = 0    # Fast read (single)
