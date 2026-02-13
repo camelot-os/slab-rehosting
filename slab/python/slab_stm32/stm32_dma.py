@@ -546,6 +546,9 @@ class STM32GPDMA(STM32Peripheral):
         self.mem_read: Optional[Callable[[int, int], int]] = None
         self.mem_write: Optional[Callable[[int, int, int], None]] = None
 
+        # DMA server reference for deferred memory access via QEMU
+        self.dma_server = None  # BasePeripheralServer instance
+
     def _read_reg(self, offset: int, size: int) -> int:
         # Global registers
         if offset == self.SECCFGR:
@@ -701,13 +704,11 @@ class STM32GPDMA(STM32Peripheral):
             f"BNDT={ch['bndt_remaining']}"
         )
 
-        # For software-triggered (SWREQ) or emulation, complete immediately
-        if ch['ctr2'] & self.CTR2_SWREQ:
-            self._complete_transfer(ch_idx)
+        if self.dma_server:
+            # Deferred execution: enqueue for after MMIO response
+            self.dma_server.enqueue_dma(self, ch_idx)
         else:
-            # Hardware request -- transfer completes when peripheral triggers
-            # For emulation: complete immediately (peripheral model will
-            # have already prepared source data)
+            # No server wired -- complete immediately (register-only mode)
             self._complete_transfer(ch_idx)
 
     def _complete_transfer(self, ch_idx: int):
@@ -770,6 +771,117 @@ class STM32GPDMA(STM32Peripheral):
                ((ccr & self.CCR_TOIE) and (csr & self.CSR_TOF)):
                 misr |= (1 << i)
         return misr
+
+    async def execute_transfer(self, ch_idx: int, server, reader, writer):
+        """
+        Perform actual DMA data movement via QEMU memory access.
+
+        Called by BasePeripheralServer._process_pending_dma() after the
+        MMIO response has been sent. Routes source/destination through
+        QEMU memory or Python peripherals based on address range.
+        """
+        ch = self.channels[ch_idx]
+        src = ch['src_addr']
+        dst = ch['dst_addr']
+        size = ch['bndt_remaining']
+        sinc = bool(ch['ctr1'] & self.CTR1_SINC)
+        dinc = bool(ch['ctr1'] & self.CTR1_DINC)
+        src_width = 1 << (ch['ctr1'] & 0x3)
+        dst_width = 1 << ((ch['ctr1'] >> 16) & 0x3)
+
+        if size == 0:
+            self._complete_transfer(ch_idx)
+            return
+
+        # Read source data
+        src_periph = server.find_peripheral(src)
+        if src_periph:
+            # P2M: read from Python peripheral
+            data = bytearray()
+            addr = src
+            for _ in range(size // src_width):
+                val, _ = src_periph.read(addr, src_width, True)
+                data.extend(val.to_bytes(src_width, 'little'))
+                if sinc:
+                    addr += src_width
+        else:
+            # M2M or M2P: bulk read from QEMU SRAM
+            data = await server.dma_mem_read(reader, writer, src, size)
+
+        # Write destination data
+        dst_periph = server.find_peripheral(dst)
+        if dst_periph:
+            # M2P: write to Python peripheral (e.g., UART DR)
+            addr = dst
+            offset = 0
+            for _ in range(size // dst_width):
+                val = int.from_bytes(data[offset:offset + dst_width], 'little')
+                dst_periph.write(addr, dst_width, val, True)
+                offset += dst_width
+                if dinc:
+                    addr += dst_width
+        else:
+            # M2M or P2M: bulk write to QEMU SRAM
+            await server.dma_mem_write(reader, writer, dst, bytes(data))
+
+        self._complete_transfer(ch_idx)
+
+        # Check linked-list descriptor chaining
+        await self._follow_linked_list(ch_idx, server, reader, writer)
+
+    async def _follow_linked_list(self, ch_idx: int, server, reader, writer):
+        """Follow CLLR linked-list descriptor chain."""
+        ch = self.channels[ch_idx]
+        cllr = ch['cllr']
+
+        if not (cllr & 0xFFFC):
+            return  # No linked-list pointer
+
+        # Compute descriptor address: CLBAR[31:16] | CLLR[15:2] << 2
+        ll_addr = (ch['clbar'] & 0xFFFF0000) | (cllr & 0xFFFC)
+
+        # Descriptor is up to 8 words (32 bytes) depending on update flags
+        desc_data = await server.dma_mem_read(reader, writer, ll_addr, 32)
+        if len(desc_data) < 32:
+            self.log.warning(f"{self.name} CH{ch_idx}: short LL descriptor")
+            return
+
+        words = [int.from_bytes(desc_data[i:i+4], 'little')
+                 for i in range(0, 32, 4)]
+        # Descriptor layout: CTR1, CTR2, CBR1, CSAR, CDAR, CTR3, CBR2, CLLR
+
+        if cllr & self.CLLR_UT1:
+            ch['ctr1'] = words[0]
+        if cllr & self.CLLR_UT2:
+            ch['ctr2'] = words[1]
+        if cllr & self.CLLR_UB1:
+            ch['cbr1'] = words[2]
+        if cllr & self.CLLR_USA:
+            ch['csar'] = words[3]
+        if cllr & self.CLLR_UDA:
+            ch['cdar'] = words[4]
+        if cllr & self.CLLR_UT3:
+            ch['ctr3'] = words[5]
+        if cllr & self.CLLR_UB2:
+            ch['cbr2'] = words[6]
+        if cllr & self.CLLR_ULL:
+            ch['cllr'] = words[7]
+
+        # Start next transfer in the chain
+        ch['src_addr'] = ch['csar']
+        ch['dst_addr'] = ch['cdar']
+        ch['bndt_remaining'] = ch['cbr1'] & 0xFFFF
+        ch['csr'] &= ~(self.CSR_IDLEF | self.CSR_TCF | self.CSR_HTF)
+        ch['ccr'] |= self.CCR_EN
+
+        self.log.debug(
+            f"{self.name} CH{ch_idx} LL: "
+            f"SRC=0x{ch['csar']:08X} DST=0x{ch['cdar']:08X} "
+            f"BNDT={ch['bndt_remaining']}"
+        )
+
+        if ch['bndt_remaining'] > 0:
+            await self.execute_transfer(ch_idx, server, reader, writer)
 
     def do_transfer(self, ch_idx: int) -> bool:
         """
