@@ -63,6 +63,22 @@ class ShmCommand(IntEnum):
     SNAPSHOT_SAVE = 15
     SNAPSHOT_RESTORE = 16
     FAULT_NOTIFY = 17
+    # DMA memory access (Python -> QEMU via SHM header)
+    DMA_READ = 18
+    DMA_WRITE = 19
+
+
+# SHM DMA header offsets and constants
+SHM_DMA_CMD_OFF = 48      # header[12] byte offset
+SHM_DMA_ADDR_OFF = 52     # header[13] byte offset
+SHM_DMA_SIZE_OFF = 56     # header[14] byte offset
+SHM_DMA_STATUS_OFF = 60   # header[15] byte offset
+SHM_DMA_DATA_OFF = 128    # DMA data region offset
+SHM_DMA_MAX_SIZE = (1024 * 1024 - 128)
+SHM_DMA_STATUS_IDLE = 0
+SHM_DMA_STATUS_PENDING = 1
+SHM_DMA_STATUS_DONE = 2
+SHM_DMA_STATUS_ERROR = 3
 
 
 @dataclass
@@ -481,6 +497,82 @@ class ShmPeripheralBridge:
             current = struct.unpack('<I', self._shm.buf[offset:offset + 4])[0]
             current &= ~(1 << bit_idx)
             struct.pack_into('<I', self._shm.buf, offset, current)
+
+    def dma_mem_read(self, addr: int, size: int) -> bytes:
+        """
+        Read memory from QEMU via SHM DMA command region.
+
+        Writes DMA_READ command to header[12-15], waits for QEMU to
+        fill data at SHM_DMA_DATA_OFF, returns the data.
+        """
+        if not self._shm or size > SHM_DMA_MAX_SIZE:
+            return b'\x00' * size
+
+        with self._lock:
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_ADDR_OFF, addr)
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_SIZE_OFF, size)
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_STATUS_OFF,
+                             SHM_DMA_STATUS_PENDING)
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_CMD_OFF,
+                             ShmCommand.DMA_READ)
+
+        # Spin-wait for QEMU to complete
+        for _ in range(10_000_000):
+            status = struct.unpack_from('<I', self._shm.buf,
+                                        SHM_DMA_STATUS_OFF)[0]
+            if status >= SHM_DMA_STATUS_DONE:
+                break
+            time.sleep(0)
+        else:
+            return b'\x00' * size
+
+        if status == SHM_DMA_STATUS_ERROR:
+            return b'\x00' * size
+
+        data = bytes(self._shm.buf[SHM_DMA_DATA_OFF:SHM_DMA_DATA_OFF + size])
+
+        # Clear command
+        struct.pack_into('<I', self._shm.buf, SHM_DMA_CMD_OFF, ShmCommand.NOP)
+        struct.pack_into('<I', self._shm.buf, SHM_DMA_STATUS_OFF,
+                         SHM_DMA_STATUS_IDLE)
+        return data
+
+    def dma_mem_write(self, addr: int, data: bytes) -> bool:
+        """
+        Write memory to QEMU via SHM DMA command region.
+
+        Writes data at SHM_DMA_DATA_OFF, then sets DMA_WRITE command
+        in header[12-15]. Waits for QEMU acknowledgment.
+        """
+        size = len(data)
+        if not self._shm or size > SHM_DMA_MAX_SIZE:
+            return False
+
+        with self._lock:
+            # Write data first
+            self._shm.buf[SHM_DMA_DATA_OFF:SHM_DMA_DATA_OFF + size] = data
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_ADDR_OFF, addr)
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_SIZE_OFF, size)
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_STATUS_OFF,
+                             SHM_DMA_STATUS_PENDING)
+            struct.pack_into('<I', self._shm.buf, SHM_DMA_CMD_OFF,
+                             ShmCommand.DMA_WRITE)
+
+        # Spin-wait for QEMU to complete
+        for _ in range(10_000_000):
+            status = struct.unpack_from('<I', self._shm.buf,
+                                        SHM_DMA_STATUS_OFF)[0]
+            if status >= SHM_DMA_STATUS_DONE:
+                break
+            time.sleep(0)
+        else:
+            return False
+
+        # Clear command
+        struct.pack_into('<I', self._shm.buf, SHM_DMA_CMD_OFF, ShmCommand.NOP)
+        struct.pack_into('<I', self._shm.buf, SHM_DMA_STATUS_OFF,
+                         SHM_DMA_STATUS_IDLE)
+        return status == SHM_DMA_STATUS_DONE
 
     def sync_mpu_from_shm(self, mpu: Optional['CortexMPU'] = None) -> Optional['CortexMPU']:
         """

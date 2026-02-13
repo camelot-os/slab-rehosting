@@ -26,6 +26,12 @@ CMD_WRITE_S = ord('T')    # Secure Write (TrustZone)
 CMD_IRQ = ord('I')        # IRQ injection
 CMD_CONFIG = ord('C')     # Security configuration
 
+# DMA memory access protocol (Python -> QEMU -> Python)
+CMD_MEM_READ = ord('M')   # Request memory read from QEMU
+CMD_MEM_WRITE = ord('N')  # Request memory write to QEMU
+CMD_MEM_RESP = ord('m')   # Memory read response from QEMU
+CMD_MEM_ACK = ord('n')    # Memory write acknowledgment from QEMU
+
 STATUS_OK = 0
 STATUS_ERROR = 1
 STATUS_SECURITY_FAULT = 2
@@ -53,6 +59,8 @@ class BasePeripheralServer(ABC):
         self.tracer = None  # Optional[MMIOTracer] -- set to enable MMIO tracing
         self.last_pc: int = 0  # Program counter from last QEMU transaction
         self.log = logging.getLogger(self.__class__.__name__)
+        # DMA pending queue: list of (dma_peripheral, channel_index)
+        self._dma_pending: list = []
 
     @abstractmethod
     def create_peripherals(self):
@@ -115,6 +123,9 @@ class BasePeripheralServer(ABC):
                     writer.write(resp)
                     await writer.drain()
 
+                    if self._dma_pending:
+                        await self._process_pending_dma(reader, writer)
+
                 elif cmd in (CMD_WRITE, CMD_WRITE_S):
                     data = await reader.readexactly(17)
                     address, size, value = struct.unpack('<III', data[:12])
@@ -137,6 +148,9 @@ class BasePeripheralServer(ABC):
                     resp = struct.pack('<IB', 0, status)
                     writer.write(resp)
                     await writer.drain()
+
+                    if self._dma_pending:
+                        await self._process_pending_dma(reader, writer)
 
                 elif cmd == CMD_CONFIG:
                     data = await reader.readexactly(10)
@@ -167,6 +181,116 @@ class BasePeripheralServer(ABC):
             writer.close()
             await writer.wait_closed()
             self.log.info("QEMU disconnected")
+
+    def enqueue_dma(self, dma_periph, ch_idx: int):
+        """Enqueue a DMA transfer for deferred execution."""
+        self._dma_pending.append((dma_periph, ch_idx))
+
+    async def _process_pending_dma(self, reader: asyncio.StreamReader,
+                                    writer: asyncio.StreamWriter):
+        """Execute pending DMA transfers after MMIO response sent."""
+        while self._dma_pending:
+            dma_periph, ch_idx = self._dma_pending.pop(0)
+            await dma_periph.execute_transfer(ch_idx, self, reader, writer)
+
+    async def dma_mem_read(self, reader: asyncio.StreamReader,
+                           writer: asyncio.StreamWriter,
+                           addr: int, size: int) -> bytes:
+        """Request bulk memory read from QEMU.
+
+        Sends CMD_MEM_READ, waits for CMD_MEM_RESP, handling any
+        interleaved MMIO requests from the CPU while waiting.
+        """
+        writer.write(struct.pack('<BII', CMD_MEM_READ, addr, size))
+        await writer.drain()
+
+        while True:
+            tag = await reader.readexactly(1)
+            cmd = tag[0]
+            if cmd == CMD_MEM_RESP:
+                resp_size = struct.unpack('<I',
+                                          await reader.readexactly(4))[0]
+                return await reader.readexactly(resp_size)
+            elif cmd in (CMD_READ, CMD_READ_S, CMD_WRITE, CMD_WRITE_S,
+                         CMD_CONFIG):
+                await self._handle_mmio_inline(cmd, reader, writer)
+            else:
+                self.log.warning(f"Unexpected tag during DMA read: {cmd:#x}")
+                break
+        return b'\x00' * size
+
+    async def dma_mem_write(self, reader: asyncio.StreamReader,
+                            writer: asyncio.StreamWriter,
+                            addr: int, data: bytes) -> int:
+        """Request bulk memory write to QEMU.
+
+        Sends CMD_MEM_WRITE, waits for CMD_MEM_ACK, handling any
+        interleaved MMIO requests from the CPU while waiting.
+        """
+        writer.write(struct.pack('<BII', CMD_MEM_WRITE, addr, len(data)))
+        writer.write(data)
+        await writer.drain()
+
+        while True:
+            tag = await reader.readexactly(1)
+            cmd = tag[0]
+            if cmd == CMD_MEM_ACK:
+                status = (await reader.readexactly(1))[0]
+                return status
+            elif cmd in (CMD_READ, CMD_READ_S, CMD_WRITE, CMD_WRITE_S,
+                         CMD_CONFIG):
+                await self._handle_mmio_inline(cmd, reader, writer)
+            else:
+                self.log.warning(f"Unexpected tag during DMA write: {cmd:#x}")
+                break
+        return 1  # Error
+
+    async def _handle_mmio_inline(self, cmd: int,
+                                   reader: asyncio.StreamReader,
+                                   writer: asyncio.StreamWriter):
+        """Handle an MMIO request that arrived during a DMA wait."""
+        if cmd in (CMD_READ, CMD_READ_S):
+            data = await reader.readexactly(13)
+            address, size = struct.unpack('<II', data[:8])
+            secure = (cmd == CMD_READ_S) or (data[8] == 1)
+            self.last_pc = struct.unpack('<I', data[9:13])[0]
+
+            periph = self.find_peripheral(address)
+            if periph:
+                value, status = periph.read(address, size, secure)
+            else:
+                value, status = 0, STATUS_OK
+
+            if self.tracer:
+                self.tracer.trace_read(address, size, value, periph,
+                                        pc=self.last_pc)
+
+            writer.write(struct.pack('<IB', value, status))
+            await writer.drain()
+
+        elif cmd in (CMD_WRITE, CMD_WRITE_S):
+            data = await reader.readexactly(17)
+            address, size, value = struct.unpack('<III', data[:12])
+            secure = (cmd == CMD_WRITE_S) or (data[12] == 1)
+            self.last_pc = struct.unpack('<I', data[13:17])[0]
+
+            periph = self.find_peripheral(address)
+            if periph:
+                status = periph.write(address, size, value, secure)
+            else:
+                status = STATUS_OK
+
+            if self.tracer:
+                self.tracer.trace_write(address, size, value, periph,
+                                         pc=self.last_pc)
+
+            writer.write(struct.pack('<IB', 0, status))
+            await writer.drain()
+
+        elif cmd == CMD_CONFIG:
+            data = await reader.readexactly(10)
+            writer.write(struct.pack('<IB', 0, STATUS_OK))
+            await writer.drain()
 
     def _start_background_tasks(self):
         """Override to start timer loops, PIO stepping, etc."""
