@@ -224,6 +224,7 @@ Documentation
    tutorials/firmware_dump_emulation
    tutorials/board_e2e_session
    tutorials/sentry_ci_runner
+   tutorials/docker_ci
 
 .. toctree::
    :maxdepth: 2
