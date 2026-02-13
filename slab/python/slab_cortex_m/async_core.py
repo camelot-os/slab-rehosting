@@ -65,13 +65,13 @@ class ThreadPoolManager:
         # I/O bound operations (serial, files)
         self.io_pool = ThreadPoolExecutor(
             max_workers=8,
-            thread_name_prefix="mcuemu_io"
+            thread_name_prefix="slab_io"
         )
 
         # CPU bound operations (crypto, checksums)
         self.compute_pool = ThreadPoolExecutor(
             max_workers=4,
-            thread_name_prefix="mcuemu_compute"
+            thread_name_prefix="slab_compute"
         )
 
         log.info("ThreadPoolManager initialized (io=8, compute=4 workers)")

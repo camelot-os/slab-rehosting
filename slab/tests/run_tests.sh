@@ -126,7 +126,7 @@ run_test() {
     local test_name=$1
     local firmware="$FIRMWARE_DIR/build/test_${test_name}.bin"
     local cpu_type="cortex-m4"
-    local extra_args=""
+    local extra_props=""
 
     # Special cases
     case $test_name in
@@ -134,7 +134,7 @@ run_test() {
             cpu_type="cortex-m33"
             ;;
         dualcore)
-            extra_args="-global mcuemu.dual-core=true"
+            extra_props=",dual-core=true"
             ;;
     esac
 
@@ -156,9 +156,7 @@ run_test() {
     sleep 0.5
 
     # Run QEMU with test firmware
-    local qemu_args="-M mcuemu -cpu $cpu_type -kernel $firmware"
-    qemu_args="$qemu_args -global mcuemu.tcp-port=$TEST_PORT"
-    qemu_args="$qemu_args $extra_args"
+    local qemu_args="-M slab-cortex-m,cpu-type=$cpu_type,tcp-port=${TEST_PORT}${extra_props} -kernel $firmware"
     qemu_args="$qemu_args -nographic -serial null"
 
     if [ $VERBOSE -eq 1 ]; then

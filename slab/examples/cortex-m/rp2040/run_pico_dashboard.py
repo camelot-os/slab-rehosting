@@ -40,9 +40,8 @@ from slab_gui.debug_dashboard import DebugDashboardPro, SignalCapture
 
 # Paths
 QEMU_PATHS = [
-    PROJECT_DIR / "build" / "qemu-system-arm",
+    PROJECT_DIR.parent / "build" / "qemu-system-arm",
     PROJECT_DIR.parent / "qemu" / "build" / "qemu-system-arm",
-    Path("/home/mre/projects/mcuemu/qemu/build/qemu-system-arm"),
     Path("/usr/bin/qemu-system-arm"),
 ]
 QEMU_BIN = next((p for p in QEMU_PATHS if p.exists()), QEMU_PATHS[0])

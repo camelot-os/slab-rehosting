@@ -20,7 +20,7 @@ TIME: 30 minutes
 """
 
 # TODO: Import the SVD parser
-# from mcuemu_cortex_m import SVDParser
+# from slab_cortex_m import SVDParser
 
 def exercise_1_1():
     """

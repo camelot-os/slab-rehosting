@@ -192,7 +192,7 @@ run_soc_test() {
     sleep 1
 
     # Run QEMU with short timeout (tests should complete quickly)
-    local qemu_args="-M mcuemu -cpu $cpu -kernel $firmware -nographic"
+    local qemu_args="-M slab-cortex-m,cpu-type=$cpu -kernel $firmware -nographic"
     timeout $TIMEOUT "$QEMU_BIN" $qemu_args >/dev/null 2>&1 &
     local qemu_pid=$!
 

@@ -15,7 +15,7 @@ class TestPeripherals(unittest.TestCase):
 
     def test_virtual_led(self):
         """Test virtual LED component."""
-        from mcuemu_cortex_m import VirtualLED
+        from slab_cortex_m import VirtualLED
 
         led = VirtualLED(pin=0)
         self.assertFalse(led.state)
@@ -26,7 +26,7 @@ class TestPeripherals(unittest.TestCase):
 
     def test_virtual_button(self):
         """Test virtual button component."""
-        from mcuemu_cortex_m import VirtualButton
+        from slab_cortex_m import VirtualButton
 
         button = VirtualButton(pin=0)
         self.assertFalse(button.pressed)
@@ -37,7 +37,7 @@ class TestPeripherals(unittest.TestCase):
 
     def test_virtual_uart(self):
         """Test virtual UART component."""
-        from mcuemu_cortex_m import VirtualUART
+        from slab_cortex_m import VirtualUART
 
         uart = VirtualUART(baudrate=115200)
         uart.write(b"Hello")
@@ -49,14 +49,14 @@ class TestSTM32Peripherals(unittest.TestCase):
 
     def test_stm32_gpio(self):
         """Test STM32 GPIO peripheral."""
-        from mcuemu_cortex_m import STM32GPIO
+        from slab_cortex_m import STM32GPIO
 
         gpio = STM32GPIO(base_address=0x40020000)
         self.assertIsNotNone(gpio)
 
     def test_stm32_usart(self):
         """Test STM32 USART peripheral."""
-        from mcuemu_cortex_m import STM32USART
+        from slab_cortex_m import STM32USART
 
         usart = STM32USART(base_address=0x40011000)
         self.assertIsNotNone(usart)

@@ -45,7 +45,7 @@ BOARD_YAML = Path(os.environ.get(
 
 SENTRY_BUILD = Path(os.environ.get(
     "SENTRY_BUILD",
-    "/home/mre/projects/sentry-kernel/builddir",
+    str(PROJECT_ROOT.parent / "sentry-kernel" / "builddir"),
 ))
 KERNEL_HEX = SENTRY_BUILD / "kernel" / "sentry-kernel.hex"
 IDLE_HEX = SENTRY_BUILD / "idle" / "idle.hex"

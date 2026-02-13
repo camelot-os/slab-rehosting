@@ -20,7 +20,7 @@ TIME: 45 minutes
 """
 
 # TODO: Import required components
-# from mcuemu_cortex_m import VirtualLED, VirtualButton, VirtualUART, STM32GPIO
+# from slab_cortex_m import VirtualLED, VirtualButton, VirtualUART, STM32GPIO
 
 def exercise_2_1():
     """

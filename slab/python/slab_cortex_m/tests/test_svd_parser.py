@@ -11,7 +11,7 @@ import unittest
 import os
 import tempfile
 
-from mcuemu_cortex_m import SVDParser
+from slab_cortex_m import SVDParser
 
 
 class TestSVDParser(unittest.TestCase):
@@ -70,7 +70,7 @@ class TestSVDPeripheral(unittest.TestCase):
 
     def test_peripheral_base_address(self):
         """Test peripheral base address handling."""
-        from mcuemu_cortex_m.svd_parser import SVDPeripheral
+        from slab_cortex_m.svd_parser import SVDPeripheral
 
         periph = SVDPeripheral(
             name="TEST",

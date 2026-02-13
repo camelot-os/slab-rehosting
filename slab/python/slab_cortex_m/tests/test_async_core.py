@@ -15,14 +15,14 @@ class TestAsyncCore(unittest.TestCase):
 
     def test_emulator_creation(self):
         """Test creating async emulator."""
-        from mcuemu_cortex_m import AsyncEmulator
+        from slab_cortex_m import AsyncEmulator
 
         emu = AsyncEmulator()
         self.assertIsNotNone(emu)
 
     def test_emulator_state(self):
         """Test emulator state enum."""
-        from mcuemu_cortex_m import EmulatorState
+        from slab_cortex_m import EmulatorState
 
         self.assertIsNotNone(EmulatorState.STOPPED)
         self.assertIsNotNone(EmulatorState.RUNNING)

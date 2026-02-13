@@ -32,9 +32,9 @@ from slab_gui.debug_dashboard import DebugDashboardPro, SignalCapture
 
 # Paths - try multiple QEMU locations
 QEMU_PATHS = [
-    PROJECT_DIR.parent / "qemu" / "build" / "qemu-system-arm",  # Public repo
-    Path("/home/mre/projects/mcuemu/qemu/build/qemu-system-arm"),  # Private repo
-    Path("/usr/bin/qemu-system-arm"),  # System install
+    PROJECT_DIR.parent / "build" / "qemu-system-arm",
+    PROJECT_DIR.parent / "qemu" / "build" / "qemu-system-arm",
+    Path("/usr/bin/qemu-system-arm"),
 ]
 QEMU_BIN = next((p for p in QEMU_PATHS if p.exists()), QEMU_PATHS[0])
 SECURE_FW = SCRIPT_DIR / "stm32h563_tz_cdc" / "build" / "secure_fw.bin"

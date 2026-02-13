@@ -33,9 +33,10 @@ from pathlib import Path
 
 # Add python path
 SCRIPT_DIR = Path(__file__).parent
-# slab/examples/cortex-m/stm32/h563/ -> 5 levels up to repository root
-PROJECT_DIR = SCRIPT_DIR.parent.parent.parent.parent.parent
-sys.path.insert(0, str(PROJECT_DIR / "python"))
+# slab/examples/cortex-m/stm32/h563/ -> 4 levels up to slab/
+SLAB_DIR = SCRIPT_DIR.parent.parent.parent.parent
+PROJECT_DIR = SLAB_DIR.parent  # Repository root
+sys.path.insert(0, str(SLAB_DIR / "python"))
 
 from slab_cortex_m.base_server import BasePeripheralServer
 from slab_cortex_m.board import load_board_config, MCU_REGISTRY
@@ -44,7 +45,7 @@ from slab_cortex_m.mmio_tracer import MMIOTracer
 
 # Paths
 QEMU_BIN = PROJECT_DIR / "build" / "qemu-system-arm"
-BOARD_YAML = PROJECT_DIR / "slab" / "boards" / "stm32h563_tz.yaml"
+BOARD_YAML = SLAB_DIR / "boards" / "stm32h563_tz.yaml"
 SECURE_FW = SCRIPT_DIR / "stm32h563_tz_cdc" / "build" / "secure_fw.bin"
 NONSECURE_FW = SCRIPT_DIR / "stm32h563_tz_cdc" / "build" / "nonsecure_fw.bin"
 
