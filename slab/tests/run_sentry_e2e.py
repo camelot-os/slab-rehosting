@@ -34,8 +34,14 @@ logging.basicConfig(
 )
 log = logging.getLogger('SentryE2E')
 
-QEMU_BIN = PROJECT_ROOT / "build" / "qemu-system-arm"
-BOARD_YAML = PROJECT_ROOT / "slab" / "boards" / "stm32u5a5_sentry.yaml"
+QEMU_BIN = Path(os.environ.get(
+    "QEMU_BIN",
+    str(PROJECT_ROOT / "build" / "qemu-system-arm"),
+))
+BOARD_YAML = Path(os.environ.get(
+    "BOARD_YAML",
+    str(PROJECT_ROOT / "slab" / "boards" / "stm32u5a5_sentry.yaml"),
+))
 
 SENTRY_BUILD = Path(os.environ.get(
     "SENTRY_BUILD",
