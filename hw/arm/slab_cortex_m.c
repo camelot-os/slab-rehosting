@@ -116,6 +116,16 @@
 #define SHM_CMD_SNAPSHOT_SAVE    15  /* Dump CPU state to SHM */
 #define SHM_CMD_SNAPSHOT_RESTORE 16  /* Load CPU state from SHM */
 #define SHM_CMD_FAULT_NOTIFY     17  /* Fault notification (plugin→Python) */
+#define SHM_CMD_DMA_READ         18  /* Python→QEMU: DMA memory read */
+#define SHM_CMD_DMA_WRITE        19  /* Python→QEMU: DMA memory write */
+
+/* SHM DMA command area in header (words 12-15) */
+#define SHM_DMA_CMD_OFF     48   /* header[12] byte offset */
+#define SHM_DMA_ADDR_OFF    52   /* header[13] byte offset */
+#define SHM_DMA_SIZE_OFF    56   /* header[14] byte offset */
+#define SHM_DMA_STATUS_OFF  60   /* header[15] byte offset */
+#define SHM_DMA_DATA_OFF    128  /* DMA data region offset */
+#define SHM_DMA_MAX_SIZE    (1024 * 1024 - SHM_DMA_DATA_OFF)
 
 /* MPU state area in SHM data region (offset 64) */
 #define SHM_MPU_OFFSET      SHM_HEADER_SIZE  /* starts at byte 64 */
@@ -186,6 +196,8 @@ typedef enum {
     RECV_TAG,     /* Waiting for first byte ('I' = IRQ, else response) */
     RECV_IRQ,     /* Reading 5 remaining IRQ bytes [irq_le32 + level] */
     RECV_DATA,    /* Reading 4 remaining response bytes */
+    RECV_MEM_HDR, /* Reading 8-byte DMA header [addr:4][size:4] */
+    RECV_MEM_WR,  /* Reading N-byte DMA write payload */
 } ProxyRecvState;
 
 struct SlabPeriphProxyState {
@@ -237,6 +249,13 @@ struct SlabPeriphProxyState {
 
     /* TrustZone: current transaction security state */
     bool current_secure;
+
+    /* DMA memory access (Python→QEMU) */
+    uint8_t  dma_cmd;           /* 'M'=read, 'N'=write, 0=none */
+    uint32_t dma_addr;          /* Target address */
+    uint32_t dma_size;          /* Transfer size */
+    uint8_t *dma_buf;           /* Dynamic buffer for DMA write data */
+    uint32_t dma_buf_alloc;     /* Allocated size of dma_buf */
 };
 
 /* Forward declarations */
@@ -773,12 +792,61 @@ static void slab_proxy_shm_check_irqs(SlabPeriphProxyState *s)
 #define SHM_IRQ_POLL_US      100  /* Running: 100 microseconds */
 #define SHM_IRQ_POLL_WFI_US  10   /* Halted (WFI): 10 microseconds */
 
+/*
+ * Process DMA commands from Python via SHM header[12-15].
+ *
+ * Python writes: header[12]=cmd, header[13]=addr, header[14]=size, header[15]=1 (pending)
+ * QEMU reads/writes via address_space and sets header[15]=2 (done).
+ * DMA data lives at SHM offset 128+.
+ */
+static void slab_proxy_shm_check_dma(SlabPeriphProxyState *s)
+{
+    volatile uint32_t *header;
+    uint32_t dma_cmd, dma_addr, dma_size;
+
+    if (!s->shm_ptr) {
+        return;
+    }
+
+    header = (volatile uint32_t *)s->shm_ptr;
+    dma_cmd = header[12];
+    if (dma_cmd == 0 || header[15] != 1) {
+        return;  /* No pending DMA command */
+    }
+
+    dma_addr = header[13];
+    dma_size = header[14];
+
+    if (dma_size > SHM_DMA_MAX_SIZE) {
+        header[15] = 3;  /* Error: too large */
+        __sync_synchronize();
+        return;
+    }
+
+    uint8_t *data_region = (uint8_t *)s->shm_ptr + SHM_DMA_DATA_OFF;
+    MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
+
+    if (dma_cmd == SHM_CMD_DMA_READ) {
+        address_space_read(&address_space_memory, dma_addr,
+                           attrs, data_region, dma_size);
+    } else if (dma_cmd == SHM_CMD_DMA_WRITE) {
+        address_space_write(&address_space_memory, dma_addr,
+                            attrs, data_region, dma_size);
+    }
+
+    /* Signal completion */
+    header[12] = 0;   /* Clear command */
+    header[15] = 2;   /* Done */
+    __sync_synchronize();
+}
+
 static void slab_proxy_shm_irq_timer(void *opaque)
 {
     SlabPeriphProxyState *s = SLAB_PERIPH_PROXY(opaque);
     int64_t interval_us;
 
     slab_proxy_shm_check_irqs(s);
+    slab_proxy_shm_check_dma(s);
 
     /*
      * When CPU is in WFI, poll aggressively for low wake-up latency.
@@ -896,6 +964,12 @@ static bool slab_proxy_tcp_feed(SlabPeriphProxyState *s,
                 s->proto_state = RECV_IRQ;
                 s->recv_len = 0;
                 s->recv_needed = 5;
+            } else if (tag == 'M' || tag == 'N') {
+                /* DMA memory read ('M') or write ('N') from Python */
+                s->dma_cmd = tag;
+                s->proto_state = RECV_MEM_HDR;
+                s->recv_len = 0;
+                s->recv_needed = 8;  /* addr(4) + size(4) */
             } else {
                 s->recv_buf[0] = tag;
                 s->recv_len = 1;
@@ -945,6 +1019,82 @@ static bool slab_proxy_tcp_feed(SlabPeriphProxyState *s,
                 s->proto_state = RECV_TAG;
                 s->recv_len = 0;
                 return true;
+            }
+            break;
+        }
+        case RECV_MEM_HDR: {
+            int want = s->recv_needed;
+            int avail = len - pos;
+            int copy = (avail < want) ? avail : want;
+            memcpy(s->recv_buf + s->recv_len, data + pos, copy);
+            s->recv_len += copy;
+            s->recv_needed -= copy;
+            pos += copy;
+            if (s->recv_needed == 0) {
+                s->dma_addr = s->recv_buf[0] |
+                    ((uint32_t)s->recv_buf[1] << 8) |
+                    ((uint32_t)s->recv_buf[2] << 16) |
+                    ((uint32_t)s->recv_buf[3] << 24);
+                s->dma_size = s->recv_buf[4] |
+                    ((uint32_t)s->recv_buf[5] << 8) |
+                    ((uint32_t)s->recv_buf[6] << 16) |
+                    ((uint32_t)s->recv_buf[7] << 24);
+
+                if (s->dma_cmd == 'M') {
+                    /* DMA read: read from address space, send to Python */
+                    MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
+                    uint8_t *buf = g_malloc(s->dma_size);
+                    address_space_read(&address_space_memory, s->dma_addr,
+                                       attrs, buf, s->dma_size);
+
+                    /* Send response: [m:1][size:4][data:N] */
+                    uint8_t hdr[5];
+                    hdr[0] = 'm';
+                    hdr[1] = (s->dma_size >> 0) & 0xFF;
+                    hdr[2] = (s->dma_size >> 8) & 0xFF;
+                    hdr[3] = (s->dma_size >> 16) & 0xFF;
+                    hdr[4] = (s->dma_size >> 24) & 0xFF;
+                    slab_proxy_flush_send(s, hdr, 5);
+                    slab_proxy_flush_send(s, buf, s->dma_size);
+                    g_free(buf);
+
+                    s->proto_state = RECV_TAG;
+                    s->recv_len = 0;
+                } else {
+                    /* DMA write: need to receive payload data first */
+                    if (s->dma_size > s->dma_buf_alloc) {
+                        g_free(s->dma_buf);
+                        s->dma_buf_alloc = s->dma_size;
+                        s->dma_buf = g_malloc(s->dma_buf_alloc);
+                    }
+                    s->proto_state = RECV_MEM_WR;
+                    s->recv_len = 0;
+                    s->recv_needed = s->dma_size;
+                }
+            }
+            break;
+        }
+        case RECV_MEM_WR: {
+            /* Accumulate DMA write payload into dma_buf */
+            int want = s->recv_needed;
+            int avail = len - pos;
+            int copy = (avail < want) ? avail : want;
+            memcpy(s->dma_buf + s->recv_len, data + pos, copy);
+            s->recv_len += copy;
+            s->recv_needed -= copy;
+            pos += copy;
+            if (s->recv_needed == 0) {
+                /* Write data to QEMU address space */
+                MemTxAttrs attrs = MEMTXATTRS_UNSPECIFIED;
+                address_space_write(&address_space_memory, s->dma_addr,
+                                    attrs, s->dma_buf, s->dma_size);
+
+                /* Send ack: [n:1][status:1] */
+                uint8_t ack[2] = { 'n', 0 };
+                slab_proxy_flush_send(s, ack, 2);
+
+                s->proto_state = RECV_TAG;
+                s->recv_len = 0;
             }
             break;
         }
