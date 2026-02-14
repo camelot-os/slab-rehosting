@@ -30,6 +30,7 @@ import subprocess
 import time
 import threading
 import logging
+import argparse
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__),
                                 '..', '..', '..', '..', '..', '..', 'python'))
@@ -231,7 +232,7 @@ def find_free_port():
         return s.getsockname()[1]
 
 
-def run_e2e_test(verbose=False):
+def run_e2e_test(verbose=False, qemu_slab_path=None, firmware_path=None):
     """Run the Sentry kernel E2E test with MPU verification."""
     if verbose:
         logging.basicConfig(level=logging.DEBUG,
@@ -242,8 +243,15 @@ def run_e2e_test(verbose=False):
     test_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(test_dir,
                                                 '..', '..', '..', '..', '..', '..', '..'))
-    qemu = os.path.join(project_root, 'build', 'qemu-system-arm')
-    firmware = os.path.join(test_dir, 'firmware.bin')
+    if qemu_slab_path is None:
+        qemu = os.path.join(project_root, 'build', 'qemu-system-arm')
+    else:
+        qemu = qemu_slab_path
+
+    if firmware_path is None:
+        firmware = os.path.join(test_dir, 'firmware.bin')
+    else:
+        firmware = firmware_path
     board_yaml = os.path.join(project_root, 'slab', 'boards',
                               'stm32u5a5_sentry_autotest.yaml')
 
@@ -415,6 +423,30 @@ def run_e2e_test(verbose=False):
 
 
 if __name__ == "__main__":
-    verbose = '-v' in sys.argv or '--verbose' in sys.argv
-    success = run_e2e_test(verbose=verbose)
+
+    parser = argparse.ArgumentParser(
+        description="Test sentry kernel via slab QEMU rehosting"
+    )
+
+    parser.add_argument(
+        "--verbose",
+        dest="verbose",
+        action="store_true",
+        help="Enable verbose output"
+    )
+
+    parser.add_argument(
+        "--qemu-slab",
+        dest="qemu_slab_path",
+        help="Path to the qemu-arm-static slab rehosting binary"
+    )
+
+    parser.add_argument(
+        "--firmware-path",
+        dest="firmware_path",
+        help="Path to the firmware binary (firmware.bin)"
+    )
+
+    args = parser.parse_args()
+    success = run_e2e_test(verbose=args.verbose, qemu_slab_path=args.qemu_slab_path, firmware_path=args.firmware_path)
     sys.exit(0 if success else 1)
